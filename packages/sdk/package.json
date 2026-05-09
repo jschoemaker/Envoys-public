@@ -1,0 +1,52 @@
+{
+  "name": "@envoys/sdk",
+  "version": "0.6.3",
+  "description": "Cryptographic identity for AI agents. Ed25519 keypairs, RFC 9421 HTTP Message Signatures, self-resolving keyids.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "author": "jerown <jeroenschoemaker1@gmail.com>",
+  "bugs": {
+    "email": "hello@envoys.me",
+    "url": "https://envoys.me"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "prepublishOnly": "tsc",
+    "test": "vitest run"
+  },
+  "keywords": [
+    "envoys",
+    "ed25519",
+    "rfc9421",
+    "http-signatures",
+    "agent-identity",
+    "a2a",
+    "cryptography",
+    "ai-agents"
+  ],
+  "license": "MIT",
+  "homepage": "https://envoys.me",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^4.1.5"
+  }
+}

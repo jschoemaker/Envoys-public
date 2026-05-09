@@ -2,7 +2,7 @@
 
 Cryptographic identity for AI agents. Ed25519 keypairs, RFC 9421 HTTP Message Signatures, self-resolving public keys.
 
-Live at **[envoys.me](https://envoys.me)** · Spec: [`/specs/signature/v1`](./specs/signature/v1.md)
+Live at **[envoys.me](https://envoys.me)** · Spec: [`/specs/signature/v1`](./specs/signature/v1.md) · Source: **[github.com/jschoemaker/Envoys-public](https://github.com/jschoemaker/Envoys-public)**
 
 ---
 

@@ -1,6 +1,6 @@
 {
   "name": "@envoys/a2a",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "description": "A2A (Agent2Agent) adapter for Envoys — signed JSON-RPC over RFC 9421.",
   "type": "module",
   "main": "dist/index.js",
@@ -16,9 +16,14 @@
     "README.md"
   ],
   "author": "jerown <jeroenschoemaker1@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jschoemaker/Envoys-public.git",
+    "directory": "packages/a2a"
+  },
   "bugs": {
     "email": "hello@envoys.me",
-    "url": "https://envoys.me"
+    "url": "https://github.com/jschoemaker/Envoys-public/issues"
   },
   "scripts": {
     "build": "tsc",

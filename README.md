@@ -262,4 +262,4 @@ pnpm -r test                      # run all tests (~142 across the workspace)
 
 ## License
 
-MIT — see [`LICENSE`](./LICENSE).
+Apache-2.0 — see [`LICENSE`](./LICENSE) and [`NOTICE`](./NOTICE).

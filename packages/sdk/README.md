@@ -107,4 +107,4 @@ The verifier-side is just one HTTP GET (the keyid URL) plus a stdlib Ed25519 sig
 
 ## License
 
-MIT
+Apache-2.0

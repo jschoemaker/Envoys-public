@@ -1,6 +1,6 @@
 {
   "name": "@envoys/sdk",
-  "version": "0.6.5",
+  "version": "0.7.0",
   "description": "Cryptographic identity for AI agents. Ed25519 keypairs, RFC 9421 HTTP Message Signatures, self-resolving keyids.",
   "type": "module",
   "main": "dist/index.js",
@@ -41,7 +41,7 @@
     "cryptography",
     "ai-agents"
   ],
-  "license": "MIT",
+  "license": "Apache-2.0",
   "homepage": "https://envoys.me",
   "engines": {
     "node": ">=18.0.0"

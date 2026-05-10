@@ -1,6 +1,6 @@
 {
   "name": "@envoys/a2a",
-  "version": "0.5.4",
+  "version": "0.6.0",
   "description": "A2A (Agent2Agent) adapter for Envoys — signed JSON-RPC over RFC 9421.",
   "type": "module",
   "main": "dist/index.js",
@@ -39,7 +39,7 @@
     "agent-identity",
     "json-rpc"
   ],
-  "license": "MIT",
+  "license": "Apache-2.0",
   "homepage": "https://envoys.me",
   "engines": {
     "node": ">=18.0.0"

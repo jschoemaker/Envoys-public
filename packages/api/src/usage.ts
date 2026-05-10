@@ -39,6 +39,7 @@ export type AuditKind =
   | 'account.handle_changed'
   | 'account.email_changed'
   | 'agent.registered'
+  | 'agent.register_failed'
   | 'agent.rotation_requested'
   | 'agent.revoked'
   | 'handle_verification.verified'

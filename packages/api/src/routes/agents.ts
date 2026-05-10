@@ -47,31 +47,39 @@ export async function agentRoutes(app: FastifyInstance) {
   app.post('/agents/register', { preHandler: requireAccountKey }, async (req, reply) => {
     const account = req.account!
 
+    // Stable reason codes are stored in audit_events.detail so the dashboard
+    // and admin stats can group failures cleanly. Keep these in sync with the
+    // labels in admin/stats.html and dashboard Recent Activity.
+    const failed = (reason: string, status: number, message: string) => {
+      recordAudit({ accountId: account.id, kind: 'agent.register_failed', detail: reason, ip: req.ip ?? null })
+      return reply.code(status).send({ error: message })
+    }
+
     const { name, public_key, capabilities = [], domain } = req.body as {
       name?: string
       public_key?: string
       capabilities?: string[]
       domain?: string
     }
-    if (!name) return reply.code(400).send({ error: 'name required' })
-    if (!public_key) return reply.code(400).send({ error: 'public_key required (generate an Ed25519 keypair and send the public key)' })
-    if (name.length > 64) return reply.code(400).send({ error: 'name must be 64 characters or fewer' })
+    if (!name) return failed('name_missing', 400, 'name required')
+    if (!public_key) return failed('pubkey_missing', 400, 'public_key required (generate an Ed25519 keypair and send the public key)')
+    if (name.length > 64) return failed('name_too_long', 400, 'name must be 64 characters or fewer')
     if (!Array.isArray(capabilities) || capabilities.length > 20) {
-      return reply.code(400).send({ error: 'capabilities must be an array of at most 20 items' })
+      return failed('capabilities_invalid_array', 400, 'capabilities must be an array of at most 20 items')
     }
     if (capabilities.some((c: any) => typeof c !== 'string' || c.length > 64)) {
-      return reply.code(400).send({ error: 'each capability must be a string of at most 64 characters' })
+      return failed('capabilities_invalid_item', 400, 'each capability must be a string of at most 64 characters')
     }
-    if (domain && domain.length > 253) return reply.code(400).send({ error: 'domain must be 253 characters or fewer' })
+    if (domain && domain.length > 253) return failed('domain_too_long', 400, 'domain must be 253 characters or fewer')
 
     // Validate the submitted public key is a real Ed25519 key
     try {
       const key = createPublicKey(public_key)
       if (key.asymmetricKeyType !== 'ed25519') {
-        return reply.code(400).send({ error: 'public_key must be an Ed25519 key' })
+        return failed('pubkey_not_ed25519', 400, 'public_key must be an Ed25519 key')
       }
     } catch {
-      return reply.code(400).send({ error: 'public_key is not a valid PEM-encoded public key' })
+      return failed('pubkey_invalid_pem', 400, 'public_key is not a valid PEM-encoded public key')
     }
 
     // Enforce agent count limit for this tier
@@ -81,9 +89,7 @@ export async function agentRoutes(app: FastifyInstance) {
         SELECT COUNT(*) as count FROM agents WHERE account_id = ? AND revoked = 0
       `).get(account.id) as { count: number }
       if (count >= limits.agents) {
-        return reply.code(403).send({
-          error: `Agent limit reached for ${account.tier} tier (max ${limits.agents}). Upgrade to add more agents.`,
-        })
+        return failed('agent_cap_reached', 403, `Agent limit reached for ${account.tier} tier (max ${limits.agents}). Upgrade to add more agents.`)
       }
     }
 
@@ -92,14 +98,14 @@ export async function agentRoutes(app: FastifyInstance) {
     let addressDomain = `${account.handle}.${SERVICE_DOMAIN}`
     if (domain) {
       if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(domain.toLowerCase())) {
-        return reply.code(400).send({ error: 'Invalid domain format' })
+        return failed('domain_invalid_format', 400, 'Invalid domain format')
       }
       const customDomain = db.prepare(`
         SELECT id FROM custom_domains
         WHERE domain = ? AND account_id = ? AND verified = 1
       `).get(domain.toLowerCase(), account.id)
       if (!customDomain) {
-        return reply.code(403).send({ error: 'Domain not verified for this account. Complete DNS verification first.' })
+        return failed('domain_not_verified', 403, 'Domain not verified for this account. Complete DNS verification first.')
       }
       addressDomain = domain.toLowerCase()
     }
@@ -107,7 +113,7 @@ export async function agentRoutes(app: FastifyInstance) {
     const address = `${agentSlug}@${addressDomain}`
 
     if (db.prepare('SELECT id FROM agents WHERE address = ?').get(address)) {
-      return reply.code(409).send({ error: `Address "${address}" is already taken — try a different name` })
+      return failed('address_taken', 409, `Address "${address}" is already taken — try a different name`)
     }
 
     const id        = randomUUID()
@@ -185,6 +191,38 @@ export async function agentRoutes(app: FastifyInstance) {
     return {
       message: 'Rotation requested — agent will generate and submit new keys on next syncKeys() call',
     }
+  })
+
+  // Per-agent activity feed for the dashboard owner — returns this agent's
+  // key history (every validity period, oldest first) plus recent resolver
+  // requests against its address. Account-scoped: only the owning account
+  // can see resolver IP / user-agent. Public verifiers should use the
+  // unauthenticated /agents/:address/key-history endpoint instead.
+  app.get('/agents/:id/activity', { preHandler: requireAccountKey }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const limit = Math.min(100, parseInt(((req.query as any)?.limit ?? '50'), 10) || 50)
+
+    const agent = db
+      .prepare('SELECT id, address FROM agents WHERE id = ? AND account_id = ?')
+      .get(id, req.account!.id) as { id: string; address: string } | undefined
+    if (!agent) return reply.code(404).send({ error: 'Agent not found' })
+
+    const key_history = db.prepare(`
+      SELECT public_key, valid_from, valid_until, reason
+      FROM public_key_history
+      WHERE agent_id = ?
+      ORDER BY valid_from ASC
+    `).all(id) as Array<{ public_key: string; valid_from: number; valid_until: number | null; reason: string }>
+
+    const resolves = db.prepare(`
+      SELECT ts, kind, status, ip, user_agent
+      FROM usage_events
+      WHERE address = ? AND kind IN ('resolve_public_key', 'resolve_agent')
+      ORDER BY ts DESC
+      LIMIT ?
+    `).all(agent.address, limit) as Array<{ ts: number; kind: string; status: number; ip: string | null; user_agent: string | null }>
+
+    return { address: agent.address, key_history, resolves }
   })
 
   // Pull-based key sync — agent calls this on every startup.

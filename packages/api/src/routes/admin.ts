@@ -158,6 +158,30 @@ export async function adminRoutes(app: FastifyInstance) {
       GROUP BY a.id ORDER BY n DESC LIMIT 10
     `).all(windowStart) as Array<{ handle: string; tier: string; n: number }>
 
+    // ── Failed agent registrations ──────────────────────────────────────
+    // Sourced from audit_events (recorded on every 4xx in /agents/register).
+    // Only failures past requireAccountKey land here — bad-account-key 401s
+    // don't reach the handler so they're invisible to this metric.
+    const REGFAIL = "kind = 'agent.register_failed'"
+    const registerFailedTotal    = (db.prepare(`SELECT COUNT(*) AS n FROM audit_events WHERE ${REGFAIL}`).get() as any).n
+    const registerFailedLast24h  = (db.prepare(`SELECT COUNT(*) AS n FROM audit_events WHERE ${REGFAIL} AND ts >= ?`).get(now - day) as any).n
+    const registerFailedWindow   = (db.prepare(`SELECT COUNT(*) AS n FROM audit_events WHERE ${REGFAIL} AND ts >= ?`).get(windowStart) as any).n
+    const registerFailedByReason = db.prepare(`
+      SELECT detail AS reason, COUNT(*) AS n
+      FROM audit_events
+      WHERE ${REGFAIL} AND ts >= ?
+      GROUP BY detail ORDER BY n DESC
+    `).all(windowStart) as Array<{ reason: string | null; n: number }>
+    // Top accounts with failed registrations in window — surfaces a single
+    // misconfigured deployment crash-looping faster than the global counter.
+    const registerFailedTopAccounts = db.prepare(`
+      SELECT a.handle, a.tier, COUNT(*) AS n
+      FROM audit_events ae
+      JOIN accounts a ON a.id = ae.account_id
+      WHERE ae.${REGFAIL} AND ae.ts >= ?
+      GROUP BY a.id ORDER BY n DESC LIMIT 10
+    `).all(windowStart) as Array<{ handle: string; tier: string; n: number }>
+
     return {
       window_days: days,
       total_resolves:        total,
@@ -190,6 +214,13 @@ export async function adminRoutes(app: FastifyInstance) {
 
       // top accounts
       top_accounts:          topAccounts,
+
+      // failed registrations
+      register_failed_total:        registerFailedTotal,
+      register_failed_last_24h:     registerFailedLast24h,
+      register_failed_window:       registerFailedWindow,
+      register_failed_by_reason:    registerFailedByReason,
+      register_failed_top_accounts: registerFailedTopAccounts,
     }
   })
 

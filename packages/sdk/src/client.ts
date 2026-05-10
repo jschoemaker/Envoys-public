@@ -474,6 +474,57 @@ export class Envoys {
     keyCache.clear()
   }
 
+  // Resolve an Ed25519 public key from a did:web DID Document.
+  //
+  // Fetches https://<domain>/.well-known/did.json, finds the first Ed25519
+  // verification method, and returns it as a PEM-encoded SPKI public key —
+  // the same shape Envoys.resolvePublicKey returns. Bridges did:web key
+  // resolution into the Envoys verification workflow without an intermediary
+  // service: a verifier that wants to check a signature whose keyid is a
+  // did:web URL can call this and pass the result to Envoys.verifyRequest.
+  //
+  // Currently supports verification methods that publish the key as
+  // publicKeyJwk (the most standardized form). Methods using
+  // publicKeyMultibase or publicKeyBase58 throw with a clear error so the
+  // caller knows which format was found; support for those can be added
+  // when there's a concrete need.
+  static async resolveDidWeb(domain: string): Promise<string> {
+    const host = domain.replace(/^https?:\/\//, '').replace(/\/$/, '')
+    const url  = `https://${host}/.well-known/did.json`
+    const res  = await fetch(url)
+    if (!res.ok) throw new Error(`did:web DID Document not found at ${url} (HTTP ${res.status})`)
+
+    const doc = await res.json() as {
+      verificationMethod?: Array<{
+        type?: string
+        publicKeyJwk?: { kty?: string; crv?: string; x?: string }
+        publicKeyMultibase?: string
+        publicKeyBase58?: string
+      }>
+    }
+
+    const methods = doc.verificationMethod ?? []
+    const ed = methods.find(m =>
+      typeof m.type === 'string' && m.type.startsWith('Ed25519') &&
+      m.publicKeyJwk?.kty === 'OKP' &&
+      m.publicKeyJwk?.crv === 'Ed25519'
+    )
+
+    if (!ed) {
+      const fallback = methods.find(m => typeof m.type === 'string' && m.type.startsWith('Ed25519'))
+      if (fallback?.publicKeyMultibase) {
+        throw new Error('did:web verification method uses publicKeyMultibase; resolveDidWeb currently supports publicKeyJwk only')
+      }
+      if (fallback?.publicKeyBase58) {
+        throw new Error('did:web verification method uses publicKeyBase58; resolveDidWeb currently supports publicKeyJwk only')
+      }
+      throw new Error(`No Ed25519 verification method with publicKeyJwk found in did:web Document at ${url}`)
+    }
+
+    const keyObj = createPublicKey({ key: ed.publicKeyJwk!, format: 'jwk' })
+    return keyObj.export({ format: 'pem', type: 'spki' }) as string
+  }
+
   // ── Internals ─────────────────────────────────────────────────────────────
   private async request(method: string, path: string, body?: object): Promise<any> {
     const res = await fetch(`${this.baseUrl}${path}`, {

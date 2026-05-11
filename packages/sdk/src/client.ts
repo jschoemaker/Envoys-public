@@ -171,7 +171,14 @@ export class Envoys {
   // Usage:
   //   const sigHeaders = agent.signRequest('POST', '/some/path', body)
   //   fetch(url, { method: 'POST', headers: { ...sigHeaders, 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-  signRequest(method: string, path: string, body?: object): Record<string, string> {
+  //
+  // Options:
+  //   tag — RFC 9421 §2.3 sf-string parameter that disambiguates signing
+  //         purpose (e.g. "task", "heartbeat", "delegation") under the same
+  //         keyid. Optional; verifiers MAY use it to enforce signing-context
+  //         expectations. Absent tag is equivalent to tag="a2a-message" for
+  //         downstream compatibility.
+  signRequest(method: string, path: string, body?: object, opts?: { tag?: string }): Record<string, string> {
     if (!this.privateKey) throw new Error('No private key — provide privateKey in EnvoysConfig')
 
     const keyid      = `${this.baseUrl}/agents/${this.address}`
@@ -183,14 +190,25 @@ export class Envoys {
     let sigBase = `"@method": ${method.toUpperCase()}\n"@path": ${path}\n`
 
     if (body !== undefined) {
-      const bodyStr = JSON.stringify(body)
-      const digest  = createHash('sha256').update(bodyStr).digest('base64')
-      headers['Content-Digest'] = `sha-256=:${digest}:`
+      const bodyBuf = Buffer.from(JSON.stringify(body))
+      // RFC 9530 / spec §6: SHA-256 by default, auto-promote to SHA-512 for
+      // bodies >= 4KB. Larger bodies benefit from the wider digest; smaller
+      // bodies stay light. Receivers MUST accept both algorithms (see verify).
+      const useSha512 = bodyBuf.length >= 4096
+      const algoNode  = useSha512 ? 'sha512' : 'sha256'
+      const algoHdr   = useSha512 ? 'sha-512' : 'sha-256'
+      const digest    = createHash(algoNode).update(bodyBuf).digest('base64')
+      headers['Content-Digest'] = `${algoHdr}=:${digest}:`
       components.push('"content-digest"')
-      sigBase += `"content-digest": sha-256=:${digest}:\n`
+      sigBase += `"content-digest": ${algoHdr}=:${digest}:\n`
     }
 
-    const params = `;keyid="${keyid}";created=${created};nonce="${nonce}"`
+    let params = `;keyid="${keyid}";created=${created};nonce="${nonce}"`
+    if (opts?.tag) {
+      // RFC 9421 §2.3 sf-string: escape backslash and DQUOTE per RFC 8941.
+      const escapedTag = opts.tag.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+      params += `;tag="${escapedTag}"`
+    }
     sigBase += `"@signature-params": (${components.join(' ')})${params}`
 
     const key = createPrivateKey(this.privateKey)
@@ -358,13 +376,23 @@ export class Envoys {
         return fail('Replay detected — signature already accepted', { keyid, address })
       }
 
-      // If body is present, verify it matches the Content-Digest header before touching the sig
+      // If body is present, verify it matches the Content-Digest header before touching the sig.
+      // Receivers MUST accept both sha-256 (default) and sha-512 (auto-promoted for >=4KB bodies).
+      // Spec §6 / RFC 9530.
       if (body !== undefined) {
         const receivedDigest = h['content-digest']
         if (!receivedDigest) {
           return fail('Missing Content-Digest header for request with body', { keyid, address })
         }
-        const expectedDigest = `sha-256=:${createHash('sha256').update(JSON.stringify(body)).digest('base64')}:`
+        const bodyBuf = Buffer.from(JSON.stringify(body))
+        let expectedDigest: string
+        if (receivedDigest.startsWith('sha-512=:')) {
+          expectedDigest = `sha-512=:${createHash('sha512').update(bodyBuf).digest('base64')}:`
+        } else if (receivedDigest.startsWith('sha-256=:')) {
+          expectedDigest = `sha-256=:${createHash('sha256').update(bodyBuf).digest('base64')}:`
+        } else {
+          return fail('Unsupported Content-Digest algorithm (expected sha-256 or sha-512)', { keyid, address })
+        }
         if (receivedDigest !== expectedDigest) {
           return fail('Content-Digest mismatch — body has been tampered', { keyid, address })
         }

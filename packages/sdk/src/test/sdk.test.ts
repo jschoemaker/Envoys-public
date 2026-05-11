@@ -55,6 +55,37 @@ describe('signRequest', () => {
     const agent = new Envoys({ agentKey: 'agt_x', address: 'a@b.envoys.me', publicKey })
     expect(() => agent.signRequest('GET', '/')).toThrow(/private key/)
   })
+
+  it('includes the tag parameter in Signature-Input when provided', () => {
+    const agent = makeAgent()
+    const headers = agent.signRequest('POST', '/api/task', { hello: 'world' }, { tag: 'task' })
+    expect(headers['Signature-Input']).toContain('tag="task"')
+  })
+
+  it('omits the tag parameter when not provided (backward compat)', () => {
+    const agent = makeAgent()
+    const headers = agent.signRequest('GET', '/path')
+    expect(headers['Signature-Input']).not.toContain('tag=')
+  })
+
+  it('escapes backslash and double-quote in tag per RFC 8941 sf-string', () => {
+    const agent = makeAgent()
+    const headers = agent.signRequest('GET', '/', undefined, { tag: 'with "quotes" and \\ backslash' })
+    expect(headers['Signature-Input']).toContain('tag="with \\"quotes\\" and \\\\ backslash"')
+  })
+
+  it('uses sha-256 Content-Digest for small bodies (< 4KB)', () => {
+    const agent = makeAgent()
+    const headers = agent.signRequest('POST', '/', { hello: 'world' })
+    expect(headers['Content-Digest']).toMatch(/^sha-256=:.+:$/)
+  })
+
+  it('auto-promotes Content-Digest to sha-512 for bodies >= 4KB', () => {
+    const agent = makeAgent()
+    const largeBody = { data: 'x'.repeat(5000) }  // ~5KB serialized
+    const headers = agent.signRequest('POST', '/', largeBody)
+    expect(headers['Content-Digest']).toMatch(/^sha-512=:.+:$/)
+  })
 })
 
 // ── verifyRequest ─────────────────────────────────────────────────────────────
@@ -88,6 +119,29 @@ describe('verifyRequest', () => {
     vi.stubGlobal('fetch', mockFetch(publicKey))
 
     const result = await Envoys.verifyRequest('POST', '/', sigHeaders as any, body)
+    expect(result.verified).toBe(true)
+  })
+
+  it('verifies a signed POST with a sha-512 Content-Digest (large body)', async () => {
+    const { publicKey, privateKey } = makeEd25519()
+    const agent = new Envoys({ agentKey: 'agt_test', address: 'sender@team.envoys.me', publicKey, privateKey })
+    const largeBody = { data: 'x'.repeat(5000) }
+    const sigHeaders = agent.signRequest('POST', '/api/upload', largeBody)
+    expect(sigHeaders['Content-Digest']).toMatch(/^sha-512=:.+:$/)
+    vi.stubGlobal('fetch', mockFetch(publicKey))
+
+    const result = await Envoys.verifyRequest('POST', '/api/upload', sigHeaders as any, largeBody)
+    expect(result.verified).toBe(true)
+  })
+
+  it('verifies a signed request that carries the tag parameter', async () => {
+    const { publicKey, privateKey } = makeEd25519()
+    const agent = new Envoys({ agentKey: 'agt_test', address: 'sender@team.envoys.me', publicKey, privateKey })
+    const sigHeaders = agent.signRequest('GET', '/heartbeat', undefined, { tag: 'heartbeat' })
+    expect(sigHeaders['Signature-Input']).toContain('tag="heartbeat"')
+    vi.stubGlobal('fetch', mockFetch(publicKey))
+
+    const result = await Envoys.verifyRequest('GET', '/heartbeat', sigHeaders as any)
     expect(result.verified).toBe(true)
   })
 

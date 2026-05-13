@@ -8,6 +8,51 @@ import { getLimits } from '../limits.js'
 import { recordUsage, recordAudit } from '../usage.js'
 import { getVerifiedDomainForHandle, getVerifiedCustomDomain } from './accounts.js'
 
+// Build a W3C DID Document for an Envoys agent. Served at /agents/:address
+// when the verifier requests Accept: application/did+json. The keyid URL is
+// both the document id and the controller — verifiers resolving the keyid
+// get a DID Document whose verificationMethod carries the same Ed25519 key
+// the Envoys-native shape would have returned. Spec §6.1.
+function buildDidDocument(address: string, publicKeyPem: string, keyidUrl: string) {
+  const jwk = createPublicKey(publicKeyPem).export({ format: 'jwk' }) as {
+    kty: string
+    crv: string
+    x:   string
+  }
+  return {
+    '@context':         ['https://www.w3.org/ns/did/v1'],
+    id:                 keyidUrl,
+    verificationMethod: [
+      {
+        id:           `${keyidUrl}#key-1`,
+        type:         'Ed25519VerificationKey2020',
+        controller:   keyidUrl,
+        publicKeyJwk: jwk,
+      },
+    ],
+    authentication:   [`${keyidUrl}#key-1`],
+    assertionMethod:  [`${keyidUrl}#key-1`],
+  }
+}
+
+// Best-effort Accept header parsing — returns true if the client signals
+// preference for application/did+json over the alternatives. Wildcard
+// (*/*) is not treated as a did+json preference; the client must name it
+// explicitly. Quality values (q=) are honored: a did+json with q=0 is
+// treated as not-preferred even if it appears in the header.
+function prefersDidJson(accept: string | undefined): boolean {
+  if (!accept) return false
+  const types = accept.toLowerCase().split(',').map(t => t.trim())
+  for (const t of types) {
+    const [mediaType, ...params] = t.split(';').map(s => s.trim())
+    if (mediaType !== 'application/did+json') continue
+    const qParam = params.find(p => p.startsWith('q='))
+    if (qParam && parseFloat(qParam.slice(2)) === 0) return false
+    return true
+  }
+  return false
+}
+
 // Extract the handle portion of an envoys address — the segment between '@'
 // and the service domain. Returns null if the address is on a custom domain
 // or otherwise doesn't follow the standard format.
@@ -369,6 +414,8 @@ export async function agentRoutes(app: FastifyInstance) {
   })
 
   // Resolve an agent by address — the keyid URL in RFC 9421 signatures resolves here.
+  // Dual-shape per spec §6: serves W3C DID Document when the client requests
+  // Accept: application/did+json, otherwise the Envoys-native shape (default).
   app.get('/agents/:address', async (req, reply) => {
     const ip = req.ip ?? null
     const ua = req.headers['user-agent'] ?? null
@@ -383,6 +430,14 @@ export async function agentRoutes(app: FastifyInstance) {
       return reply.code(404).send({ error: 'Agent not found' })
     }
     recordUsage({ kind: 'resolve_agent', address, status: 200, ip, userAgent: ua })
+
+    if (prefersDidJson(req.headers.accept)) {
+      const baseUrl  = process.env.BASE_URL ?? 'https://envoys.me'
+      const keyidUrl = `${baseUrl}/agents/${agent.address}`
+      reply.type('application/did+json')
+      return buildDidDocument(agent.address, agent.public_key, keyidUrl)
+    }
+
     return {
       address: agent.address,
       public_key: agent.public_key,

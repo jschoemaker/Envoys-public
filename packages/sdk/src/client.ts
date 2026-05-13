@@ -47,6 +47,40 @@ function fromB64url(s: string): Buffer {
   return Buffer.from(s, 'base64url')
 }
 
+// Extract the first Ed25519 public key from a W3C DID Document and return it
+// as PEM SPKI. Supports publicKeyJwk (OKP/Ed25519) — the form Envoys' own
+// did:web export uses and the most standardized across DID resolvers. Other
+// encodings (publicKeyMultibase, publicKeyBase58) surface a clear error so
+// the caller knows which format was found.
+function extractEd25519FromDidDocument(doc: any, sourceUrl: string): string {
+  const methods: Array<{
+    type?: string
+    publicKeyJwk?: { kty?: string; crv?: string; x?: string }
+    publicKeyMultibase?: string
+    publicKeyBase58?: string
+  }> = doc?.verificationMethod ?? []
+
+  const ed = methods.find(m =>
+    typeof m.type === 'string' && m.type.startsWith('Ed25519') &&
+    m.publicKeyJwk?.kty === 'OKP' &&
+    m.publicKeyJwk?.crv === 'Ed25519'
+  )
+
+  if (!ed) {
+    const fallback = methods.find(m => typeof m.type === 'string' && m.type.startsWith('Ed25519'))
+    if (fallback?.publicKeyMultibase) {
+      throw new Error(`DID Document at ${sourceUrl} uses publicKeyMultibase; currently supports publicKeyJwk only`)
+    }
+    if (fallback?.publicKeyBase58) {
+      throw new Error(`DID Document at ${sourceUrl} uses publicKeyBase58; currently supports publicKeyJwk only`)
+    }
+    throw new Error(`No Ed25519 verification method with publicKeyJwk found in DID Document at ${sourceUrl}`)
+  }
+
+  const keyObj = createPublicKey({ key: ed.publicKeyJwk!, format: 'jwk' })
+  return keyObj.export({ format: 'pem', type: 'spki' }) as string
+}
+
 export class Envoys {
   readonly address: string
   readonly publicKey: string
@@ -258,7 +292,7 @@ export class Envoys {
       const address   = keyid.slice(agentsIdx + '/agents/'.length)
       const keyidBase = keyid.slice(0, agentsIdx)
 
-      const publicKeyPem = await Envoys.resolvePublicKey(address, keyidBase)
+      const publicKeyPem = await Envoys.resolveKeyFromKeyid(keyid)
       const key = createPublicKey(publicKeyPem)
       const ok  = cryptoVerify(null, Buffer.from(`${headerB64}.${payloadB64}`), key, fromB64url(sigB64))
       if (!ok) return { verified: false, keyid, address, error: 'Signature verification failed' }
@@ -414,7 +448,7 @@ export class Envoys {
       }
       sigBase += `"@signature-params": (${componentsStr})${paramsStr}`
 
-      const publicKeyPem = await Envoys.resolvePublicKey(address, keyidBase)
+      const publicKeyPem = await Envoys.resolveKeyFromKeyid(keyid)
       const key = createPublicKey(publicKeyPem)
       const ok  = cryptoVerify(null, Buffer.from(sigBase), key, Buffer.from(sigB64, 'base64'))
       if (!ok) return fail('Signature verification failed', { keyid, address, publicKey: publicKeyPem })
@@ -497,6 +531,43 @@ export class Envoys {
     return data.public_key
   }
 
+  // Fetch a public key by fetching the keyid URL directly and accepting either
+  // shape it serves: a W3C DID Document (Content-Type application/did+json) or
+  // the Envoys-native { address, public_key } object (any JSON Content-Type).
+  // This is the verifier path used by verifyRequest and verifyAgentCard, and
+  // is what makes Envoys structurally compatible with the dual-shape keyid
+  // resolution called for in the A2A Identity Trust Framework v1.0 roadmap
+  // (a2aproject/A2A#1850) — the verifier accepts whichever shape the keyid
+  // happens to serve without caller-side opt-in.
+  //
+  // Cached for 5 minutes keyed on the full keyid URL. The cache is shared with
+  // resolvePublicKey but keyed differently, so neither path invalidates the
+  // other's entries.
+  static async resolveKeyFromKeyid(keyidUrl: string): Promise<string> {
+    const cached = keyCache.get(keyidUrl)
+    if (cached && cached.expires > Date.now()) return cached.key
+
+    const res = await fetch(keyidUrl, {
+      headers: { Accept: 'application/did+json, application/json;q=0.9' },
+    })
+    if (!res.ok) throw new Error(`keyid URL did not resolve: ${keyidUrl} (HTTP ${res.status})`)
+
+    const contentType = (res.headers?.get?.('content-type') ?? '').toLowerCase()
+    const data        = await res.json() as any
+
+    let publicKeyPem: string
+    if (contentType.includes('application/did+json') || Array.isArray(data?.verificationMethod)) {
+      publicKeyPem = extractEd25519FromDidDocument(data, keyidUrl)
+    } else if (typeof data?.public_key === 'string') {
+      publicKeyPem = data.public_key
+    } else {
+      throw new Error(`Unrecognized keyid response shape at ${keyidUrl} — expected DID Document or { public_key }`)
+    }
+
+    keyCache.set(keyidUrl, { key: publicKeyPem, expires: Date.now() + KEY_CACHE_TTL_MS })
+    return publicKeyPem
+  }
+
   // Clear the in-process public key cache. Useful for tests or after a known rotation.
   static clearKeyCache(): void {
     keyCache.clear()
@@ -521,36 +592,8 @@ export class Envoys {
     const url  = `https://${host}/.well-known/did.json`
     const res  = await fetch(url)
     if (!res.ok) throw new Error(`did:web DID Document not found at ${url} (HTTP ${res.status})`)
-
-    const doc = await res.json() as {
-      verificationMethod?: Array<{
-        type?: string
-        publicKeyJwk?: { kty?: string; crv?: string; x?: string }
-        publicKeyMultibase?: string
-        publicKeyBase58?: string
-      }>
-    }
-
-    const methods = doc.verificationMethod ?? []
-    const ed = methods.find(m =>
-      typeof m.type === 'string' && m.type.startsWith('Ed25519') &&
-      m.publicKeyJwk?.kty === 'OKP' &&
-      m.publicKeyJwk?.crv === 'Ed25519'
-    )
-
-    if (!ed) {
-      const fallback = methods.find(m => typeof m.type === 'string' && m.type.startsWith('Ed25519'))
-      if (fallback?.publicKeyMultibase) {
-        throw new Error('did:web verification method uses publicKeyMultibase; resolveDidWeb currently supports publicKeyJwk only')
-      }
-      if (fallback?.publicKeyBase58) {
-        throw new Error('did:web verification method uses publicKeyBase58; resolveDidWeb currently supports publicKeyJwk only')
-      }
-      throw new Error(`No Ed25519 verification method with publicKeyJwk found in did:web Document at ${url}`)
-    }
-
-    const keyObj = createPublicKey({ key: ed.publicKeyJwk!, format: 'jwk' })
-    return keyObj.export({ format: 'pem', type: 'spki' }) as string
+    const doc = await res.json()
+    return extractEd25519FromDidDocument(doc, url)
   }
 
   // ── Internals ─────────────────────────────────────────────────────────────

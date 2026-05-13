@@ -314,6 +314,46 @@ describe('Public key resolution', () => {
     const res = await app.inject({ method: 'GET', url: '/agents/nobody@nowhere.envoys.me' })
     expect(res.statusCode).toBe(404)
   })
+
+  // Spec §6.1 — dual-shape keyid resolution. Verifier may request DID Document
+  // form via Accept; default behavior unchanged.
+  it('GET /agents/:address returns DID Document when Accept: application/did+json', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url:    `/agents/${address}`,
+      headers: { accept: 'application/did+json' },
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.headers['content-type']).toContain('application/did+json')
+    const doc = res.json()
+    expect(doc['@context']).toContain('https://www.w3.org/ns/did/v1')
+    expect(doc.verificationMethod).toHaveLength(1)
+    const vm = doc.verificationMethod[0]
+    expect(vm.type).toMatch(/^Ed25519/)
+    expect(vm.publicKeyJwk?.kty).toBe('OKP')
+    expect(vm.publicKeyJwk?.crv).toBe('Ed25519')
+    expect(typeof vm.publicKeyJwk?.x).toBe('string')
+  })
+
+  it('GET /agents/:address ignores wildcard Accept and serves native shape', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url:    `/agents/${address}`,
+      headers: { accept: '*/*' },
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toMatchObject({ address, public_key: publicKey })
+  })
+
+  it('GET /agents/:address with mixed Accept honors q=0 on did+json', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url:    `/agents/${address}`,
+      headers: { accept: 'application/did+json;q=0, application/json' },
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toMatchObject({ address, public_key: publicKey })
+  })
 })
 
 // ── Usage tracking + admin stats ──────────────────────────────────────────────

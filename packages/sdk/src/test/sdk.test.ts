@@ -751,3 +751,156 @@ describe('allowlist', () => {
     expect(r.verified).toBe(true)
   })
 })
+
+// ── Dual-shape keyid resolution (A2A-IDF v1.0 roadmap, PR #1850) ─────────────
+// The verifier accepts either shape served at the keyid URL: a W3C DID Document
+// (Content-Type application/did+json) or the Envoys-native { public_key } object.
+
+describe('resolveKeyFromKeyid (dual-shape)', () => {
+  beforeEach(() => { vi.unstubAllGlobals(); Envoys.clearKeyCache(); Envoys.clearReplayCache(); Envoys.clearPins() })
+
+  function jwkFromPem(publicKeyPem: string) {
+    const { createPublicKey } = require('crypto')
+    return createPublicKey(publicKeyPem).export({ format: 'jwk' })
+  }
+
+  function mockDidDocument(publicKey: string) {
+    const jwk = jwkFromPem(publicKey)
+    return vi.fn().mockResolvedValue({
+      ok:      true,
+      headers: { get: (n: string) => n.toLowerCase() === 'content-type' ? 'application/did+json' : null },
+      json:    async () => ({
+        '@context':         ['https://www.w3.org/ns/did/v1'],
+        id:                 'did:web:envoys.me:agents:sender@team.envoys.me',
+        verificationMethod: [{
+          id:           'did:web:envoys.me:agents:sender@team.envoys.me#key-1',
+          type:         'Ed25519VerificationKey2020',
+          controller:   'did:web:envoys.me:agents:sender@team.envoys.me',
+          publicKeyJwk: jwk,
+        }],
+      }),
+    })
+  }
+
+  it('verifies a signed request when keyid serves a DID Document', async () => {
+    const { publicKey, privateKey } = makeEd25519()
+    const agent = new Envoys({ agentKey: 'agt_x', address: 'sender@team.envoys.me', publicKey, privateKey })
+    const sigHeaders = agent.signRequest('POST', '/api/task', { hello: 'world' })
+    vi.stubGlobal('fetch', mockDidDocument(publicKey))
+
+    const result = await Envoys.verifyRequest('POST', '/api/task', sigHeaders as any, { hello: 'world' })
+    expect(result.verified).toBe(true)
+    expect(result.keyid).toBe('https://envoys.me/agents/sender@team.envoys.me')
+    expect(result.publicKey).toBe(publicKey)
+  })
+
+  it('verifies a signed request when keyid serves Envoys-native { public_key }', async () => {
+    const { publicKey, privateKey } = makeEd25519()
+    const agent = new Envoys({ agentKey: 'agt_x', address: 'sender@team.envoys.me', publicKey, privateKey })
+    const sigHeaders = agent.signRequest('GET', '/path')
+    const fetchMock  = vi.fn().mockResolvedValue({
+      ok:      true,
+      headers: { get: (n: string) => n.toLowerCase() === 'content-type' ? 'application/json' : null },
+      json:    async () => ({ address: 'sender@team.envoys.me', public_key: publicKey }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await Envoys.verifyRequest('GET', '/path', sigHeaders as any)
+    expect(result.verified).toBe(true)
+    expect(result.publicKey).toBe(publicKey)
+  })
+
+  it('falls back to shape detection when Content-Type header is missing', async () => {
+    // Legacy resolvers and existing test mocks may not set Content-Type.
+    // The resolver detects shape by payload structure when the header is absent.
+    const { publicKey, privateKey } = makeEd25519()
+    const agent = new Envoys({ agentKey: 'agt_x', address: 'sender@team.envoys.me', publicKey, privateKey })
+    const sigHeaders = agent.signRequest('GET', '/path')
+    const fetchMock  = vi.fn().mockResolvedValue({
+      ok:   true,  // no headers — pre-0.7.2 mock shape
+      json: async () => ({ public_key: publicKey }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await Envoys.verifyRequest('GET', '/path', sigHeaders as any)
+    expect(result.verified).toBe(true)
+  })
+
+  it('detects DID Document by payload shape when Content-Type says application/json', async () => {
+    // Some resolvers serve DID Documents as plain application/json. Fall back to
+    // structural detection (presence of verificationMethod array).
+    const { publicKey, privateKey } = makeEd25519()
+    const agent = new Envoys({ agentKey: 'agt_x', address: 'sender@team.envoys.me', publicKey, privateKey })
+    const sigHeaders = agent.signRequest('GET', '/path')
+    const jwk = jwkFromPem(publicKey)
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok:      true,
+      headers: { get: () => 'application/json' },
+      json:    async () => ({
+        id:                 'did:web:envoys.me',
+        verificationMethod: [{ type: 'Ed25519VerificationKey2020', publicKeyJwk: jwk }],
+      }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await Envoys.verifyRequest('GET', '/path', sigHeaders as any)
+    expect(result.verified).toBe(true)
+  })
+
+  it('throws with a clear error when DID Document uses publicKeyMultibase', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok:      true,
+      headers: { get: () => 'application/did+json' },
+      json:    async () => ({
+        verificationMethod: [{
+          type:               'Ed25519VerificationKey2020',
+          publicKeyMultibase: 'z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH',
+        }],
+      }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(Envoys.resolveKeyFromKeyid('https://envoys.me/agents/x@y.envoys.me'))
+      .rejects.toThrow(/publicKeyMultibase/)
+  })
+
+  it('rejects unrecognized keyid response shapes', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok:      true,
+      headers: { get: () => 'application/json' },
+      json:    async () => ({ something: 'else' }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(Envoys.resolveKeyFromKeyid('https://envoys.me/agents/x@y.envoys.me'))
+      .rejects.toThrow(/Unrecognized keyid response shape/)
+  })
+
+  it('caches by full keyid URL', async () => {
+    const { publicKey } = makeEd25519()
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok:      true,
+      headers: { get: () => 'application/json' },
+      json:    async () => ({ public_key: publicKey }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await Envoys.resolveKeyFromKeyid('https://envoys.me/agents/a@b.envoys.me')
+    await Envoys.resolveKeyFromKeyid('https://envoys.me/agents/a@b.envoys.me')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('sends Accept header advertising both shapes', async () => {
+    const { publicKey } = makeEd25519()
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok:      true,
+      headers: { get: () => 'application/json' },
+      json:    async () => ({ public_key: publicKey }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await Envoys.resolveKeyFromKeyid('https://envoys.me/agents/a@b.envoys.me')
+    const call = fetchMock.mock.calls[0]
+    const accept = call[1]?.headers?.Accept ?? ''
+    expect(accept).toContain('application/did+json')
+    expect(accept).toContain('application/json')
+  })
+})

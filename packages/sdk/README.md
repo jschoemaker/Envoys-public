@@ -72,7 +72,7 @@ console.log(`Verified ${result.address}`, result.keyid, result.publicKey)
 ## How it works
 
 1. **Register** — Envoys stores your public key, indexed by your address.
-2. **Sign** — Attach `Signature-Input`, `Signature`, `Content-Digest` headers (RFC 9421). The `keyid` is your address URL: `https://envoys.me/agents/you@your-handle.envoys.me`. Each signature includes a fresh `nonce`.
+2. **Sign** — Attach `Signature-Input`, `Signature`, `Content-Digest` headers (RFC 9421). The `keyid` is your address URL: `https://envoys.me/agents/you@your-handle.envoys.me`. Each signature includes a fresh `nonce`. Bodies ≥4KB auto-promote from `sha-256` to `sha-512` for the digest.
 3. **Verify** — The recipient GETs your keyid URL to fetch your public key, reconstructs the signature base, and verifies. No Envoys account needed to verify.
 
 Replay protection: the SDK rejects signatures older than 5 minutes, more than 30 seconds in the future, with a tampered `Content-Digest`, or any signature already accepted (in-process dedup cache keyed by `(keyid, created, signature)`).
@@ -85,6 +85,25 @@ Replay protection: the SDK rejects signatures older than 5 minutes, more than 30
 - **Optional allowlist** — pass `{ allowlist: [...] }` to reject cryptographically-valid requests from senders not on your list. The allowlist matches against keyid OR address.
 
 Pin storage is pluggable via the `PinStore` interface; default is in-process Map.
+
+### Dual-shape keyid resolution (W3C DID interop)
+
+The verifier accepts either shape served at a `keyid` URL:
+
+- **`application/did+json`** → W3C DID Document with an Ed25519 `verificationMethod` (`publicKeyJwk`)
+- **`application/json`** or any other JSON content type → Envoys-native `{ address, public_key }`
+
+No caller-side opt-in is required — `Envoys.verifyRequest()` sniffs `Content-Type` (with structural fallback) and routes to the right parser. Signatures from agents whose `keyid` happens to serve a DID Document verify the same as signatures from Envoys-native agents. Both ship with spec `/specs/signature/v1` §6.
+
+For explicit did:web bridging, `Envoys.resolveDidWeb(domain)` returns a PEM SPKI from a `https://<domain>/.well-known/did.json` document. The lower-level `Envoys.resolveKeyFromKeyid(keyidUrl)` does the dual-shape fetch directly and is what the verifier calls internally.
+
+### Optional: per-signature `tag`
+
+`signRequest` accepts an optional `tag` parameter (RFC 9421 §2.3) to disambiguate signing purpose under one `keyid` — for example `"task"`, `"heartbeat"`, or `"delegation"`. Verifiers MAY enforce that the tag matches the expected context. Absence is equivalent to `tag="a2a-message"`.
+
+```ts
+const headers = agent.signRequest('POST', '/api/task', body, { tag: 'task' })
+```
 
 ---
 

@@ -122,10 +122,37 @@ aggregate `npm test`. The vector format is implementation-neutral — a
 verifier in any language can consume the same `manifest.json` + vector
 files.
 
-A second cross-check, `scripts/sdk-cross-check.mjs`, runs the same
-fixtures through `@envoys/sdk`'s `Envoys.verifyRequest()` — a separate
-signature-base reconstruction from `verify-fixtures.mjs`. Build the SDK
-first (`pnpm --filter @envoys/sdk build`), then `node
+### Cross-walking other suites
+
+`verify-fixtures.mjs` is pluggable per fixture format — a `--format`
+adapter normalizes each source into one internal vector shape, and the
+verification core is shared:
+
+```bash
+node scripts/verify-fixtures.mjs <path-to-aim-fixtures> --format aim
+```
+
+`aim` walks the AIM `aim-did-rfc9421` composition fixtures
+(`opena2a-org/a2a-idf-conformance`) and verifies their wire layer — the
+RFC 9421 signature, which is where the cross-suite byte-match lives. The
+envelope (bilateral receipt, delegation chain) is framework-layer and
+out of scope for this check, matching how AIM's own fixtures scope the
+conformance claim. A `hippo` adapter is stubbed pending
+`opena2a-org/a2a-idf-conformance#2` merging — the format is still under
+revision.
+
+This is **mesh participation, not an arbiter**: the Envoys verifier
+validating AIM's wire layer is one node checking another, the same way
+AIM's verifiers and aeoess's suite cross-check Envoys. It is not a
+neutral central validator — that role wants a clean-room implementation
+independent of every provider.
+
+### SDK cross-check
+
+`scripts/sdk-cross-check.mjs` runs the same fixtures through
+`@envoys/sdk`'s `Envoys.verifyRequest()` — a separate signature-base
+reconstruction from `verify-fixtures.mjs`. Build the SDK first
+(`pnpm --filter @envoys/sdk build`), then `node
 scripts/sdk-cross-check.mjs`. Both passing means two independent Envoys
 implementations agree on the vector set, not the generator agreeing
 with itself.

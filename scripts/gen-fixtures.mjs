@@ -53,8 +53,13 @@ const VECTORS = [
     body: Buffer.from('{"task":"summarize","url":"https://example.com/doc"}'),
     created: 1714000180, nonce: 'MDEyMzQ1Njc4OUFCQ0RFRg', tag: 'task' },
 
+  // vec-5: JSON body whose serialized form is exactly 4096 bytes — the §4.2
+  // SHA-512 auto-promotion threshold. JSON.stringify({data:'A'×4085}) is
+  // 9 + 4085 + 2 = 4096 bytes, so it tests the threshold through the same
+  // JSON-body path the SDK and real A2A traffic use.
   { file: 'positive/vec-5-sha512-large-body.json',
-    method: 'POST', path: '/api/upload', body: Buffer.alloc(4096, 0x41),
+    method: 'POST', path: '/api/upload',
+    body: Buffer.from(JSON.stringify({ data: 'A'.repeat(4085) })),
     created: 1714000240, nonce: 'WFhYWFhYWFhYWFhYWFhYWA' },
 
   { file: 'positive/vec-6-dual-shape-did-document.json',

@@ -91,7 +91,7 @@ any edit to confirm nothing drifted.
 | `positive/vec-2-post-json-body.json` | ✅ computed | Mirrors spec §14 Vector 2; matches `aeoess@c16aa04` |
 | `positive/vec-3-post-empty-body.json` | ✅ computed | Mirrors spec §14 Vector 3 |
 | `positive/vec-4-tag-param.json` | ✅ computed | `tag="task"` in Signature-Input and signature base |
-| `positive/vec-5-sha512-large-body.json` | ✅ computed | 4096-byte body, SHA-512 auto-promotion per §4.2 |
+| `positive/vec-5-sha512-large-body.json` | ✅ computed | JSON body serializing to exactly 4096 bytes, SHA-512 auto-promotion per §4.2 |
 | `positive/vec-6-dual-shape-did-document.json` | ✅ computed | Same wire signature as Vector 2; keyid serves a DID Document under `keyid_response` |
 | `negative/vec-n1-content-digest-mismatch.json` | ✅ defined | No signature to compute — verifier must reject pre-signature |
 | `negative/vec-n2-expired-timestamp.json` | ✅ defined | `created` older than 300s before "now" reference |
@@ -121,6 +121,14 @@ It exits non-zero on any failure, so it drops straight into CI or an
 aggregate `npm test`. The vector format is implementation-neutral — a
 verifier in any language can consume the same `manifest.json` + vector
 files.
+
+A second cross-check, `scripts/sdk-cross-check.mjs`, runs the same
+fixtures through `@envoys/sdk`'s `Envoys.verifyRequest()` — a separate
+signature-base reconstruction from `verify-fixtures.mjs`. Build the SDK
+first (`pnpm --filter @envoys/sdk build`), then `node
+scripts/sdk-cross-check.mjs`. Both passing means two independent Envoys
+implementations agree on the vector set, not the generator agreeing
+with itself.
 
 ## License
 

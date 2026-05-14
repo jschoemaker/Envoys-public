@@ -1,0 +1,19 @@
+{
+  "id": "vec-1-get-no-body",
+  "spec_ref": "v1.5.0 §14 Vector 1",
+  "description": "GET request, no body — minimal signed request shape. Content-Digest is the SHA-256 of zero bytes.",
+  "inputs": {
+    "method": "GET",
+    "path": "/api/health",
+    "body": null,
+    "keyid": "https://envoys.me/agents/test@rfc8032-vec1.example",
+    "created": 1714000000,
+    "nonce": "AAECAwQFBgcICQoLDA0ODw"
+  },
+  "expected": {
+    "content_digest": "sha-256=:47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=:",
+    "signature_input": "sig1=(\"@method\" \"@path\" \"content-digest\");keyid=\"https://envoys.me/agents/test@rfc8032-vec1.example\";created=1714000000;nonce=\"AAECAwQFBgcICQoLDA0ODw\"",
+    "signature_base": "\"@method\": GET\n\"@path\": /api/health\n\"content-digest\": sha-256=:47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=:\n\"@signature-params\": (\"@method\" \"@path\" \"content-digest\");keyid=\"https://envoys.me/agents/test@rfc8032-vec1.example\";created=1714000000;nonce=\"AAECAwQFBgcICQoLDA0ODw\"",
+    "signature": "XUpjUHt36NbHgAZrQkFY2fSNUR19tgmRlGO1dBhaZDgBv4wb55qgJf2buv3wgnTYwtT+1sH2jzSbcgG6FLGKCA=="
+  }
+}

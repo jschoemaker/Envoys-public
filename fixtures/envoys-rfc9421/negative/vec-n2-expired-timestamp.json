@@ -1,0 +1,25 @@
+{
+  "id": "vec-n2-expired-timestamp",
+  "spec_ref": "v1.5.0 §5.2",
+  "description": "A cryptographically-valid request whose `created` parameter is older than the §5.2 acceptance window (default 300 seconds). The signature itself verifies; the timestamp is what fails.",
+  "inputs": {
+    "method": "GET",
+    "path": "/api/health",
+    "body": null,
+    "headers_received": {
+      "Content-Digest": "sha-256=:47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=:",
+      "Signature-Input": "sig1=(\"@method\" \"@path\" \"content-digest\");keyid=\"https://envoys.me/agents/test@rfc8032-vec1.example\";created=1714000000;nonce=\"AAECAwQFBgcICQoLDA0ODw\"",
+      "Signature": "sig1=:XUpjUHt36NbHgAZrQkFY2fSNUR19tgmRlGO1dBhaZDgBv4wb55qgJf2buv3wgnTYwtT+1sH2jzSbcgG6FLGKCA==:"
+    },
+    "verifier_now_unix": 1714001000,
+    "age_seconds": 1000
+  },
+  "expected": {
+    "http_status": 401,
+    "error_code": "-32001",
+    "failure_layer": "wire",
+    "failure_field": "created",
+    "rejection_stage": "pre-signature-verification",
+    "verifier_behavior": "Compute age = verifier_now_unix - created = 1000 seconds. Reject because 1000 > 300 (default window). The Ed25519 signature is mathematically valid against the §13 keypair — a conformant verifier MUST still reject on timestamp before signature."
+  }
+}

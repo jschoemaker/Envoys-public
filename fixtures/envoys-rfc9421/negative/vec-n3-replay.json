@@ -1,0 +1,33 @@
+{
+  "id": "vec-n3-replay",
+  "spec_ref": "v1.5.0 §7",
+  "description": "A cryptographically-valid request that has already been accepted within the timestamp window. The replay-detection cache (keyed on `(keyid, created, signature)` per §7) MUST reject the duplicate.",
+  "scenario": [
+    "T = 0:      Verifier receives the request below for the first time. Signature is valid, timestamp is fresh, Content-Digest matches. Verifier accepts the request and records `(keyid, created, signature)` in its dedup cache.",
+    "T = 30s:    Verifier receives the IDENTICAL wire payload — same headers, same body. Signature still mathematically valid; timestamp still within the 300s window; Content-Digest still matches.",
+    "Expected:   Verifier rejects with -32001 because the tuple is in the cache (per §7)."
+  ],
+  "inputs": {
+    "method": "POST",
+    "path": "/api/task",
+    "body": {"task":"summarize","url":"https://example.com/doc"},
+    "body_bytes_utf8": "{\"task\":\"summarize\",\"url\":\"https://example.com/doc\"}",
+    "headers_received": {
+      "Content-Digest": "sha-256=:MKfdDhv01pOYGoZ8VKY5CNdevySMUL8MqvJxVJaaWu0=:",
+      "Signature-Input": "sig1=(\"@method\" \"@path\" \"content-digest\");keyid=\"https://envoys.me/agents/test@rfc8032-vec1.example\";created=1714000060;nonce=\"EBESExQVFhcYGRobHB0eHw\"",
+      "Signature": "sig1=:i5tKcOHKhRTCztR2cazuzNAg9rPiRf47MKTOGve92Rs43gNmltuN5LVScedR6C08MGsQykMc7txJ21KCG8SEBQ==:"
+    }
+  },
+  "expected_on_first_delivery": {
+    "http_status": 200,
+    "verifier_behavior": "Accept the request, record (keyid, created, signature) in dedup cache."
+  },
+  "expected_on_replay": {
+    "http_status": 401,
+    "error_code": "-32001",
+    "failure_layer": "wire",
+    "failure_field": "nonce",
+    "rejection_stage": "post-timestamp-check-pre-signature-verification",
+    "verifier_behavior": "Look up (keyid, created, signature) in dedup cache → present → reject with -32001. A conformant verifier MAY skip Ed25519 verification on a cache hit since the result would be the same as the first delivery."
+  }
+}

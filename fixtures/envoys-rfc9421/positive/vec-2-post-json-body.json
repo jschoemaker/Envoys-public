@@ -1,0 +1,21 @@
+{
+  "id": "vec-2-post-json-body",
+  "spec_ref": "v1.5.0 §14 Vector 2",
+  "description": "POST request with a JSON body. The canonical fixture aeoess/aps-conformance-suite@c16aa04 byte-matches this vector field-for-field.",
+  "inputs": {
+    "method": "POST",
+    "path": "/api/task",
+    "body": {"task":"summarize","url":"https://example.com/doc"},
+    "body_serialization": "JSON.stringify with no spaces — the exact bytes the Content-Digest covers",
+    "body_bytes_utf8": "{\"task\":\"summarize\",\"url\":\"https://example.com/doc\"}",
+    "keyid": "https://envoys.me/agents/test@rfc8032-vec1.example",
+    "created": 1714000060,
+    "nonce": "EBESExQVFhcYGRobHB0eHw"
+  },
+  "expected": {
+    "content_digest": "sha-256=:MKfdDhv01pOYGoZ8VKY5CNdevySMUL8MqvJxVJaaWu0=:",
+    "signature_input": "sig1=(\"@method\" \"@path\" \"content-digest\");keyid=\"https://envoys.me/agents/test@rfc8032-vec1.example\";created=1714000060;nonce=\"EBESExQVFhcYGRobHB0eHw\"",
+    "signature_base": "\"@method\": POST\n\"@path\": /api/task\n\"content-digest\": sha-256=:MKfdDhv01pOYGoZ8VKY5CNdevySMUL8MqvJxVJaaWu0=:\n\"@signature-params\": (\"@method\" \"@path\" \"content-digest\");keyid=\"https://envoys.me/agents/test@rfc8032-vec1.example\";created=1714000060;nonce=\"EBESExQVFhcYGRobHB0eHw\"",
+    "signature": "i5tKcOHKhRTCztR2cazuzNAg9rPiRf47MKTOGve92Rs43gNmltuN5LVScedR6C08MGsQykMc7txJ21KCG8SEBQ=="
+  }
+}

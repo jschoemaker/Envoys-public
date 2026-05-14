@@ -1,0 +1,20 @@
+{
+  "id": "vec-3-post-empty-body",
+  "spec_ref": "v1.5.0 §14 Vector 3",
+  "description": "POST request with an empty JSON object as body. Exercises the body-present-but-tiny path where Content-Digest is over the literal two bytes {}.",
+  "inputs": {
+    "method": "POST",
+    "path": "/api/echo",
+    "body": {},
+    "body_bytes_utf8": "{}",
+    "keyid": "https://envoys.me/agents/test@rfc8032-vec1.example",
+    "created": 1714000120,
+    "nonce": "ICEiIyQlJicoKSorLC0uLw"
+  },
+  "expected": {
+    "content_digest": "sha-256=:RBNvo1WzZ4oRRq0W9+hknpT7T8If536DEMBg9hyq/4o=:",
+    "signature_input": "sig1=(\"@method\" \"@path\" \"content-digest\");keyid=\"https://envoys.me/agents/test@rfc8032-vec1.example\";created=1714000120;nonce=\"ICEiIyQlJicoKSorLC0uLw\"",
+    "signature_base": "\"@method\": POST\n\"@path\": /api/echo\n\"content-digest\": sha-256=:RBNvo1WzZ4oRRq0W9+hknpT7T8If536DEMBg9hyq/4o=:\n\"@signature-params\": (\"@method\" \"@path\" \"content-digest\");keyid=\"https://envoys.me/agents/test@rfc8032-vec1.example\";created=1714000120;nonce=\"ICEiIyQlJicoKSorLC0uLw\"",
+    "signature": "m2besJKk6Q0MIwFoTENobvvHxFan1fUTv7bzY4EB6OjfIlktqwKa7r/Ab0tDDWFGjQ0CbALgvWGcQfzDr/GeBQ=="
+  }
+}

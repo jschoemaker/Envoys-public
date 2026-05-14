@@ -1,0 +1,47 @@
+{
+  "id": "vec-6-dual-shape-did-document",
+  "spec_ref": "v1.5.0 §6.1",
+  "description": "Verifies that the wire signature succeeds when the keyid URL serves a W3C DID Document (Content-Type: application/did+json) instead of the Envoys-native shape. Wire-format signature is identical to Vector 2; the difference is in the keyid resolution response.",
+  "inputs": {
+    "method": "POST",
+    "path": "/api/task",
+    "body": {"task":"summarize","url":"https://example.com/doc"},
+    "body_bytes_utf8": "{\"task\":\"summarize\",\"url\":\"https://example.com/doc\"}",
+    "keyid": "https://envoys.me/agents/test@rfc8032-vec1.example",
+    "created": 1714000060,
+    "nonce": "EBESExQVFhcYGRobHB0eHw"
+  },
+  "keyid_response": {
+    "content_type": "application/did+json",
+    "body": {
+      "@context": ["https://www.w3.org/ns/did/v1"],
+      "id": "https://envoys.me/agents/test@rfc8032-vec1.example",
+      "verificationMethod": [
+        {
+          "id": "https://envoys.me/agents/test@rfc8032-vec1.example#key-1",
+          "type": "Ed25519VerificationKey2020",
+          "controller": "https://envoys.me/agents/test@rfc8032-vec1.example",
+          "publicKeyJwk": {
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"
+          }
+        }
+      ],
+      "authentication": ["https://envoys.me/agents/test@rfc8032-vec1.example#key-1"],
+      "assertionMethod": ["https://envoys.me/agents/test@rfc8032-vec1.example#key-1"]
+    }
+  },
+  "expected": {
+    "content_digest": "sha-256=:MKfdDhv01pOYGoZ8VKY5CNdevySMUL8MqvJxVJaaWu0=:",
+    "signature_input": "sig1=(\"@method\" \"@path\" \"content-digest\");keyid=\"https://envoys.me/agents/test@rfc8032-vec1.example\";created=1714000060;nonce=\"EBESExQVFhcYGRobHB0eHw\"",
+    "signature_base": "\"@method\": POST\n\"@path\": /api/task\n\"content-digest\": sha-256=:MKfdDhv01pOYGoZ8VKY5CNdevySMUL8MqvJxVJaaWu0=:\n\"@signature-params\": (\"@method\" \"@path\" \"content-digest\");keyid=\"https://envoys.me/agents/test@rfc8032-vec1.example\";created=1714000060;nonce=\"EBESExQVFhcYGRobHB0eHw\"",
+    "signature": "i5tKcOHKhRTCztR2cazuzNAg9rPiRf47MKTOGve92Rs43gNmltuN5LVScedR6C08MGsQykMc7txJ21KCG8SEBQ==",
+    "note_on_signature_reuse": "Wire-format signature and signature_base are intentionally identical to Vector 2. Only the keyid resolution response differs — verifying that signature-base reconstruction does not depend on the resolver shape."
+  },
+  "verifier_assertions": [
+    "Verifier accepts Content-Type application/did+json from the keyid URL",
+    "Verifier extracts Ed25519 publicKeyJwk and derives the same PEM SPKI as the Envoys-native shape would have returned",
+    "Wire signature verifies byte-identically to Vector 2"
+  ]
+}

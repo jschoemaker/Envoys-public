@@ -1,0 +1,27 @@
+{
+  "id": "vec-4-tag-param",
+  "spec_ref": "v1.5.0 §4.3",
+  "description": "POST request with the v1.5 OPTIONAL `tag` parameter set to \"task\". Exercises RFC 9421 §2.3 sf-string serialization; tag appears in the Signature-Input AND the signature base (between nonce and the trailing close-paren of @signature-params).",
+  "inputs": {
+    "method": "POST",
+    "path": "/api/task",
+    "body": {"task":"summarize","url":"https://example.com/doc"},
+    "body_bytes_utf8": "{\"task\":\"summarize\",\"url\":\"https://example.com/doc\"}",
+    "keyid": "https://envoys.me/agents/test@rfc8032-vec1.example",
+    "created": 1714000180,
+    "nonce": "MDEyMzQ1Njc4OUFCQ0RFRg",
+    "tag": "task"
+  },
+  "expected": {
+    "content_digest": "sha-256=:MKfdDhv01pOYGoZ8VKY5CNdevySMUL8MqvJxVJaaWu0=:",
+    "signature_input": "sig1=(\"@method\" \"@path\" \"content-digest\");keyid=\"https://envoys.me/agents/test@rfc8032-vec1.example\";created=1714000180;nonce=\"MDEyMzQ1Njc4OUFCQ0RFRg\";tag=\"task\"",
+    "signature_base": "\"@method\": POST\n\"@path\": /api/task\n\"content-digest\": sha-256=:MKfdDhv01pOYGoZ8VKY5CNdevySMUL8MqvJxVJaaWu0=:\n\"@signature-params\": (\"@method\" \"@path\" \"content-digest\");keyid=\"https://envoys.me/agents/test@rfc8032-vec1.example\";created=1714000180;nonce=\"MDEyMzQ1Njc4OUFCQ0RFRg\";tag=\"task\"",
+    "signature": "eaBvXOrSPjB0vtX8UnWzgwHZZCw2d6Q4OhLDsILphDU+w+PbokLPPcRR7x9ay02HR8M8Bh0NtMP2lP5KP2zcBw=="
+  },
+  "verifier_assertions": [
+    "Signature-Input contains `tag=\"task\"` after the nonce parameter",
+    "Signature base includes the tag parameter in the @signature-params line, byte-identical to Signature-Input minus the `sig1=` prefix",
+    "An RFC 8941 §3.3.3 sf-string parser accepts the tag value `task` as a valid bare token wrapped in DQUOTE",
+    "A verifier configured to enforce tag=\"task\" for /api/task accepts this request; a verifier configured to enforce tag=\"heartbeat\" rejects it"
+  ]
+}

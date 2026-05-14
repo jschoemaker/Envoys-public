@@ -1,0 +1,13 @@
+{
+  "schema": "envoys-rfc9421-fixture-keypair/v1",
+  "source": "RFC 8032 §7.1 Test 1",
+  "algorithm": "Ed25519",
+  "private_key_seed_hex": "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
+  "public_key_pem_spki": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=\n-----END PUBLIC KEY-----\n",
+  "public_key_jwk": {
+    "kty": "OKP",
+    "crv": "Ed25519",
+    "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"
+  },
+  "note": "This keypair is published in RFC 8032 §7.1 Test 1 and is intentionally non-secret. It exists solely to make cross-implementation verification reproducible — any Ed25519 library can derive the public key from the seed and verify the signatures in positive/*.json byte-for-byte."
+}

@@ -1,0 +1,25 @@
+{
+  "id": "vec-n1-content-digest-mismatch",
+  "spec_ref": "v1.5.0 §5.3",
+  "description": "The wire payload arrives with a Content-Digest header that does not match the SHA-256 of the body bytes. A conformant verifier MUST reject the request with HTTP 401 / JSON-RPC -32001 before any signature verification is attempted (per §5.3). This vector starts from Vector 2 and tampers only the body bytes; the signature itself is valid for the body the sender originally signed.",
+  "inputs": {
+    "method": "POST",
+    "path": "/api/task",
+    "body_received": {"task":"DELETE-ALL","url":"https://attacker.example.com/exfil"},
+    "body_received_bytes_utf8": "{\"task\":\"DELETE-ALL\",\"url\":\"https://attacker.example.com/exfil\"}",
+    "headers_received": {
+      "Content-Digest": "sha-256=:MKfdDhv01pOYGoZ8VKY5CNdevySMUL8MqvJxVJaaWu0=:",
+      "Signature-Input": "sig1=(\"@method\" \"@path\" \"content-digest\");keyid=\"https://envoys.me/agents/test@rfc8032-vec1.example\";created=1714000060;nonce=\"EBESExQVFhcYGRobHB0eHw\"",
+      "Signature": "sig1=:i5tKcOHKhRTCztR2cazuzNAg9rPiRf47MKTOGve92Rs43gNmltuN5LVScedR6C08MGsQykMc7txJ21KCG8SEBQ==:"
+    },
+    "tampering": "The Content-Digest and Signature were originally computed over Vector 2's body {\"task\":\"summarize\",\"url\":\"https://example.com/doc\"}. Body has been replaced in transit; headers were not re-signed."
+  },
+  "expected": {
+    "http_status": 401,
+    "error_code": "-32001",
+    "failure_layer": "wire",
+    "failure_field": "content-digest",
+    "rejection_stage": "pre-signature-verification",
+    "verifier_behavior": "Recompute SHA-256 of body_received_bytes_utf8 → does not equal the digest in the Content-Digest header → reject with -32001. Do not proceed to signature reconstruction or Ed25519 verification."
+  }
+}

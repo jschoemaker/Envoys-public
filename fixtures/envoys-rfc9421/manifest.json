@@ -1,0 +1,88 @@
+{
+  "schema": "envoys-rfc9421-fixture-manifest/v1",
+  "extension_uri": "https://envoys.me/specs/signature/v1",
+  "spec_version": "1.5.0",
+  "spec_commit": "85c63b3",
+  "keypair": "keypair.json",
+  "vectors": [
+    {
+      "id": "vec-1-get-no-body",
+      "file": "positive/vec-1-get-no-body.json",
+      "spec_ref": "v1.5.0 §14 Vector 1",
+      "kind": "positive",
+      "covers": ["wire-signature", "no-body"],
+      "status": "computed"
+    },
+    {
+      "id": "vec-2-post-json-body",
+      "file": "positive/vec-2-post-json-body.json",
+      "spec_ref": "v1.5.0 §14 Vector 2",
+      "kind": "positive",
+      "covers": ["wire-signature", "content-digest-sha256", "json-body"],
+      "status": "computed",
+      "cross_validates_against": ["aeoess/aps-conformance-suite@c16aa04"]
+    },
+    {
+      "id": "vec-3-post-empty-body",
+      "file": "positive/vec-3-post-empty-body.json",
+      "spec_ref": "v1.5.0 §14 Vector 3",
+      "kind": "positive",
+      "covers": ["wire-signature", "content-digest-sha256", "empty-json-object-body"],
+      "status": "computed"
+    },
+    {
+      "id": "vec-4-tag-param",
+      "file": "positive/vec-4-tag-param.json",
+      "spec_ref": "v1.5.0 §4.3",
+      "kind": "positive",
+      "covers": ["wire-signature", "tag-parameter-rfc9421-2.3"],
+      "status": "computed"
+    },
+    {
+      "id": "vec-5-sha512-large-body",
+      "file": "positive/vec-5-sha512-large-body.json",
+      "spec_ref": "v1.5.0 §4.2 + §5.3",
+      "kind": "positive",
+      "covers": ["wire-signature", "content-digest-sha512", "auto-promotion-at-4096-bytes"],
+      "status": "computed"
+    },
+    {
+      "id": "vec-6-dual-shape-did-document",
+      "file": "positive/vec-6-dual-shape-did-document.json",
+      "spec_ref": "v1.5.0 §6.1",
+      "kind": "positive",
+      "covers": ["wire-signature", "dual-shape-keyid", "did-document-resolution"],
+      "status": "inputs-only"
+    },
+    {
+      "id": "vec-n1-content-digest-mismatch",
+      "file": "negative/vec-n1-content-digest-mismatch.json",
+      "spec_ref": "v1.5.0 §5.3",
+      "kind": "negative",
+      "covers": ["body-integrity"],
+      "expected_error_code": "-32001",
+      "failure_layer": "wire",
+      "status": "defined"
+    },
+    {
+      "id": "vec-n2-expired-timestamp",
+      "file": "negative/vec-n2-expired-timestamp.json",
+      "spec_ref": "v1.5.0 §5.2",
+      "kind": "negative",
+      "covers": ["timestamp-freshness"],
+      "expected_error_code": "-32001",
+      "failure_layer": "wire",
+      "status": "defined"
+    },
+    {
+      "id": "vec-n3-replay",
+      "file": "negative/vec-n3-replay.json",
+      "spec_ref": "v1.5.0 §7",
+      "kind": "negative",
+      "covers": ["replay-protection"],
+      "expected_error_code": "-32001",
+      "failure_layer": "wire",
+      "status": "defined"
+    }
+  ]
+}

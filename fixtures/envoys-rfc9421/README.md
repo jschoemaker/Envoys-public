@@ -137,9 +137,11 @@ node scripts/verify-fixtures.mjs <path-to-aim-fixtures> --format aim
 RFC 9421 signature, which is where the cross-suite byte-match lives. The
 envelope (bilateral receipt, delegation chain) is framework-layer and
 out of scope for this check, matching how AIM's own fixtures scope the
-conformance claim. A `hippo` adapter is stubbed pending
-`opena2a-org/a2a-idf-conformance#2` merging — the format is still under
-revision.
+conformance claim. **Currently 3/3 PASS** (signature-alone /
+bilateral-receipt / delegation-chain-3link byte-identical to Envoys §14
+V1/V2/V3), verified 2026-05-14 against `envoys-public@74a1113`. A
+`hippo` adapter is stubbed pending `opena2a-org/a2a-idf-conformance#2`
+merging — the format is still under revision.
 
 This is **mesh participation, not an arbiter**: the Envoys verifier
 validating AIM's wire layer is one node checking another, the same way

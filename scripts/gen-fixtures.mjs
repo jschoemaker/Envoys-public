@@ -31,9 +31,10 @@ const KEYID = 'https://envoys.me/agents/test@rfc8032-vec1.example'
 
 // ── Canonical inputs — the source of truth ──────────────────────────────────
 // `body` is the literal byte sequence the Content-Digest covers. vec-1 models
-// an empty body (Content-Digest of zero bytes is still present + signed, per
-// spec §14 Vector 1). vec-6 reuses vec-2's inputs verbatim — same wire
-// signature, different keyid-resolution shape.
+// an empty body — Content-Digest of zero bytes is still present + signed, per
+// spec §4.2 (always required, body MAY be empty) and §14 Vector 1. vec-6
+// reuses vec-2's inputs verbatim — same wire signature, different
+// keyid-resolution shape.
 const VECTORS = [
   { file: 'positive/vec-1-get-no-body.json',
     method: 'GET',  path: '/api/health', body: Buffer.from(''),

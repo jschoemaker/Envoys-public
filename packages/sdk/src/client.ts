@@ -218,24 +218,23 @@ export class Envoys {
     const keyid      = `${this.baseUrl}/agents/${this.address}`
     const created    = Math.floor(Date.now() / 1000)
     const nonce      = randomBytes(16).toString('base64url')  // 22-char unique tag
-    const components = ['"@method"', '"@path"']
+    const components = ['"@method"', '"@path"', '"content-digest"']
     const headers: Record<string, string> = {}
 
     let sigBase = `"@method": ${method.toUpperCase()}\n"@path": ${path}\n`
 
-    if (body !== undefined) {
-      const bodyBuf = Buffer.from(JSON.stringify(body))
-      // RFC 9530 / spec §6: SHA-256 by default, auto-promote to SHA-512 for
-      // bodies >= 4KB. Larger bodies benefit from the wider digest; smaller
-      // bodies stay light. Receivers MUST accept both algorithms (see verify).
-      const useSha512 = bodyBuf.length >= 4096
-      const algoNode  = useSha512 ? 'sha512' : 'sha256'
-      const algoHdr   = useSha512 ? 'sha-512' : 'sha-256'
-      const digest    = createHash(algoNode).update(bodyBuf).digest('base64')
-      headers['Content-Digest'] = `${algoHdr}=:${digest}:`
-      components.push('"content-digest"')
-      sigBase += `"content-digest": ${algoHdr}=:${digest}:\n`
-    }
+    // Per spec §4.2 + §14: content-digest is signed for every request. For
+    // no-body requests the digest is over zero bytes (sha-256 of empty =
+    // 47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=). RFC 9530: SHA-256 by
+    // default; auto-promote to SHA-512 for bodies >= 4096 bytes (§4.2).
+    // Receivers MUST accept both algorithms (§5.3).
+    const bodyBuf   = body === undefined ? Buffer.alloc(0) : Buffer.from(JSON.stringify(body))
+    const useSha512 = bodyBuf.length >= 4096
+    const algoNode  = useSha512 ? 'sha512'  : 'sha256'
+    const algoHdr   = useSha512 ? 'sha-512' : 'sha-256'
+    const digest    = createHash(algoNode).update(bodyBuf).digest('base64')
+    headers['Content-Digest'] = `${algoHdr}=:${digest}:`
+    sigBase += `"content-digest": ${algoHdr}=:${digest}:\n`
 
     let params = `;keyid="${keyid}";created=${created};nonce="${nonce}"`
     if (opts?.tag) {

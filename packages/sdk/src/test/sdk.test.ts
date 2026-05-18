@@ -37,11 +37,12 @@ describe('signRequest', () => {
     expect(headers['Signature-Input']).toContain('"content-digest"')
   })
 
-  it('omits Content-Digest for requests without a body', () => {
+  it('always emits Content-Digest, computed over empty bytes for no-body requests (spec v1.5.1 §4.2)', () => {
     const agent = makeAgent()
     const headers = agent.signRequest('GET', '/path')
-    expect(headers['Content-Digest']).toBeUndefined()
-    expect(headers['Signature-Input']).not.toContain('content-digest')
+    // sha-256 of zero bytes
+    expect(headers['Content-Digest']).toBe('sha-256=:47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=:')
+    expect(headers['Signature-Input']).toContain('"content-digest"')
   })
 
   it('sets keyid to the agent address URL', () => {

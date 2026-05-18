@@ -48,10 +48,13 @@ function fromB64url(s: string): Buffer {
 }
 
 // Extract the first Ed25519 public key from a W3C DID Document and return it
-// as PEM SPKI. Supports publicKeyJwk (OKP/Ed25519) — the form Envoys' own
-// did:web export uses and the most standardized across DID resolvers. Other
-// encodings (publicKeyMultibase, publicKeyBase58) surface a clear error so
-// the caller knows which format was found.
+// as PEM SPKI. Accepts verification methods whose inner publicKeyJwk is
+// OKP/Ed25519, regardless of whether the outer `type` field is one of:
+//   - `Ed25519VerificationKey2018` / `Ed25519VerificationKey2020` (W3C SUITES)
+//   - `JsonWebKey2020` (W3C generic JWK wrapper — what most modern did:web
+//      deployments emit, including AlgoVoi)
+// Other key encodings (publicKeyMultibase, publicKeyBase58) surface a clear
+// error so the caller knows which format was found.
 function extractEd25519FromDidDocument(doc: any, sourceUrl: string): string {
   const methods: Array<{
     type?: string
@@ -60,14 +63,19 @@ function extractEd25519FromDidDocument(doc: any, sourceUrl: string): string {
     publicKeyBase58?: string
   }> = doc?.verificationMethod ?? []
 
-  const ed = methods.find(m =>
-    typeof m.type === 'string' && m.type.startsWith('Ed25519') &&
+  const isEd25519Jwk = (m: { type?: string; publicKeyJwk?: { kty?: string; crv?: string } }) =>
     m.publicKeyJwk?.kty === 'OKP' &&
-    m.publicKeyJwk?.crv === 'Ed25519'
-  )
+    m.publicKeyJwk?.crv === 'Ed25519' &&
+    typeof m.type === 'string' &&
+    (m.type.startsWith('Ed25519') || m.type === 'JsonWebKey2020')
+
+  const ed = methods.find(isEd25519Jwk)
 
   if (!ed) {
-    const fallback = methods.find(m => typeof m.type === 'string' && m.type.startsWith('Ed25519'))
+    const fallback = methods.find(m =>
+      typeof m.type === 'string' &&
+      (m.type.startsWith('Ed25519') || m.type === 'JsonWebKey2020' || m.type === 'Multikey'),
+    )
     if (fallback?.publicKeyMultibase) {
       throw new Error(`DID Document at ${sourceUrl} uses publicKeyMultibase; currently supports publicKeyJwk only`)
     }

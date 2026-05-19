@@ -1,4 +1,6 @@
-// Cross-impl interop helper — invoked from envoys-py's cross_impl_test.py.
+// Cross-impl interop helper — drives @envoys/sdk sign/verify from JSON
+// input/output files, so external test harnesses (in any language) can
+// produce a Node-signed request or verify one without embedding the SDK.
 //
 // Two modes:
 //   sign   — reads {address, base_url, public_pem, private_pem, method, path, body, tag?}

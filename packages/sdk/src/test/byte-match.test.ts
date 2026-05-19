@@ -1,8 +1,8 @@
 // Byte-match tests against envoys-rfc9421 §14 vectors.
 //
 // These prove the Node SDK's wire format is byte-identical to the spec
-// vectors. Sister suite: envoys-py/tests/test_byte_match.py — both SDKs
-// converging on the same canonical fixtures.
+// vectors. Any independent implementation targeting the same vectors
+// can converge against the same canonical fixtures.
 //
 // Mocks node:crypto's randomBytes via vi.mock (hoisted above imports)
 // and Date.now via vi.useFakeTimers so signRequest produces deterministic

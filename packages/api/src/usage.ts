@@ -5,6 +5,7 @@ export type UsageKind =
   | 'resolve_agent'
   | 'fetch_skill'
   | 'fetch_spec'
+  | 'fetch_did_doc'
 
 const insertStmt = db.prepare(
   'INSERT INTO usage_events (ts, kind, address, status, ip, user_agent) VALUES (?, ?, ?, ?, ?, ?)',

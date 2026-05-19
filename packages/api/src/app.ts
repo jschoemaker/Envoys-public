@@ -27,6 +27,36 @@ const SIGNATURE_SPEC_V1 = readFileSync(
   'utf-8',
 )
 
+// Service-level W3C DID Document for did:web:envoys.me. Identifies the
+// Envoys agent-registry service (not the org behind it) with one Ed25519
+// verification method and the public service endpoints the service exposes.
+// Resolvers (@envoys/sdk's resolveDidWeb / W3C DID resolvers / etc.) fetch
+// this at /.well-known/did.json.
+//
+// The public-key JWK x value comes from ENVOYS_SERVICE_DID_PUBLIC_JWK_X.
+// The matching private key never lives on the server — it's held on the
+// maintainer's machine for occasional org/service-level signing only.
+// If the env var is unset, the route returns 503 (same fail-soft pattern
+// as the home-page demo agent).
+const ENVOYS_SERVICE_DID_PUBLIC_JWK_X = process.env.ENVOYS_SERVICE_DID_PUBLIC_JWK_X
+const SERVICE_DID_DOC = ENVOYS_SERVICE_DID_PUBLIC_JWK_X
+  ? {
+      '@context':         ['https://www.w3.org/ns/did/v1', 'https://w3id.org/security/suites/jws-2020/v1'],
+      id:                 'did:web:envoys.me',
+      verificationMethod: [{
+        id:           'did:web:envoys.me#service-key-1',
+        type:         'JsonWebKey2020',
+        controller:   'did:web:envoys.me',
+        publicKeyJwk: { kty: 'OKP', crv: 'Ed25519', x: ENVOYS_SERVICE_DID_PUBLIC_JWK_X },
+      }],
+      service: [
+        { id: 'did:web:envoys.me#registry',    type: 'EnvoysAgentRegistry', serviceEndpoint: 'https://envoys.me/agents/' },
+        { id: 'did:web:envoys.me#spec',        type: 'EnvoysSpec',          serviceEndpoint: 'https://envoys.me/specs/signature/v1' },
+        { id: 'did:web:envoys.me#agent-skill', type: 'EnvoysAgentSkill',    serviceEndpoint: 'https://envoys.me/.well-known/agent-skill' },
+      ],
+    }
+  : null
+
 export function buildApp(opts: { logger?: boolean | object; rateLimit?: boolean } = {}) {
   const app = Fastify({ logger: (opts.logger ?? true) as any, trustProxy: true })
 
@@ -123,6 +153,20 @@ export function buildApp(opts: { logger?: boolean | object; rateLimit?: boolean 
   }
   app.get('/specs/signature/v1',    respondWithSpecV1)
   app.get('/specs/signature/v1.md', respondWithSpecV1)
+
+  // W3C DID Document for did:web:envoys.me. See SERVICE_DID_DOC above.
+  app.get('/.well-known/did.json', async (req, reply) => {
+    const ip = req.ip ?? null
+    const ua = req.headers['user-agent'] ?? null
+    if (!SERVICE_DID_DOC) {
+      recordUsage({ kind: 'fetch_did_doc', address: null, status: 503, ip, userAgent: ua })
+      return reply.code(503).send({ error: 'Service DID Document not configured' })
+    }
+    recordUsage({ kind: 'fetch_did_doc', address: null, status: 200, ip, userAgent: ua })
+    reply.type('application/did+json')
+    reply.header('cache-control', 'public, max-age=300')
+    return SERVICE_DID_DOC
+  })
 
   app.get('/health', async () => ({ status: 'ok', ts: Date.now() }))
 

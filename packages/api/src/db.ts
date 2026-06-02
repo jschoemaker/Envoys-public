@@ -16,9 +16,6 @@ db.exec(`
     email               TEXT UNIQUE,
     account_key         TEXT UNIQUE NOT NULL,
     handle              TEXT UNIQUE NOT NULL,
-    google_id           TEXT UNIQUE,
-    recovery_token      TEXT UNIQUE,
-    recovery_token_exp  INTEGER,
     created_at          INTEGER NOT NULL
   );
 
@@ -162,9 +159,6 @@ export type Account = {
   account_key: string
   handle: string
   tier: string
-  google_id: string | null
-  recovery_token: string | null
-  recovery_token_exp: number | null
   created_at: number
 }
 

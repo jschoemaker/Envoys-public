@@ -7,7 +7,6 @@ import { fileURLToPath } from 'url'
 import { accountRoutes } from './routes/accounts.js'
 import { agentRoutes } from './routes/agents.js'
 import { domainRoutes } from './routes/domains.js'
-import { authRoutes } from './routes/auth.js'
 import { skillRoutes } from './routes/skill.js'
 import { adminRoutes } from './routes/admin.js'
 import { waitlistRoutes } from './routes/waitlist.js'
@@ -105,7 +104,6 @@ export function buildApp(opts: { logger?: boolean | object; rateLimit?: boolean 
     skip: (req: FastifyRequest) =>
       req.url === '/health' ||
       req.url === '/' ||
-      req.url === '/app' ||
       req.url === '/privacy' ||
       req.url === '/terms' ||
       req.url === '/sitemap.xml' ||
@@ -118,7 +116,6 @@ export function buildApp(opts: { logger?: boolean | object; rateLimit?: boolean 
     prefix: '/',
   })
 
-  app.register(authRoutes)
   app.register(skillRoutes)
   app.register(accountRoutes)
   app.register(agentRoutes)
@@ -128,7 +125,6 @@ export function buildApp(opts: { logger?: boolean | object; rateLimit?: boolean 
   app.register(demoRoutes)
 
   app.get('/', async (_req, reply) => reply.sendFile('home.html'))
-  app.get('/app', async (_req, reply) => reply.sendFile('app.html'))
   app.get('/privacy', async (_req, reply) => reply.sendFile('legal.html'))
   app.get('/terms',   async (_req, reply) => reply.sendFile('legal.html'))
 

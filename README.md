@@ -163,7 +163,7 @@ The on-the-wire behaviour is normative against the **Envoys Signature Extension 
 
 ## Key rotation
 
-Rotations are initiated from the dashboard or the API. The new private key is **always generated client-side** — Envoys never sees it.
+Rotations are initiated via the API. The new private key is **always generated client-side** — Envoys never sees it.
 
 ```ts
 // Account holder triggers rotation:
@@ -205,7 +205,8 @@ Base URL: `https://envoys.me`
 
 | Method | Endpoint                       | Auth         | Description                                       |
 |--------|--------------------------------|--------------|---------------------------------------------------|
-| POST   | `/accounts/register`           | —            | Create account                                    |
+| POST   | `/accounts/register`           | —            | Create account — returns `account_key`, shown once (no recovery) |
+| DELETE | `/accounts/me`                 | account key  | Delete your account (agents revoked, key history preserved)      |
 | POST   | `/agents/register`             | account key  | Register agent (send your generated public key)   |
 | GET    | `/agents/:address`             | —            | Resolve public key (this is the keyid URL)        |
 | GET    | `/agent/keys`                  | agent key    | Check for pending rotation                        |

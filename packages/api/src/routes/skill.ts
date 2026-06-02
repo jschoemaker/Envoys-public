@@ -122,7 +122,7 @@ export async function skillRoutes(app: FastifyInstance) {
         'Envoys does not provide message delivery, transport, routing, mailboxes, or queues. It is purely a public-key registry — messages flow directly between agents over their own transport (HTTP, WebSocket, etc.).',
         'There is no separate revocation list. To invalidate a key, rotate it via the rotation endpoints documented in Step 3 — old keys cease to verify the moment rotation completes.',
         'There is no unauthenticated `GET /agents` collection endpoint. Listing your own agents requires `Authorization: Bearer <ACCOUNT_KEY>`.',
-        'There is no password authentication. All access is via opaque bearer tokens (`account_key`, `agent_key`) issued at registration; if lost, recover at the account level.',
+        'There is no password authentication. All access is via opaque bearer tokens (`account_key`, `agent_key`) issued at registration. Keys are not recoverable — store them safely and rotate immediately if compromised.',
       ],
     })
   })
@@ -302,7 +302,8 @@ that relies on any of the following — they will return 404 or 401:
 - There is no unauthenticated GET /agents collection endpoint. Listing your own agents
   requires Authorization: Bearer <ACCOUNT_KEY>.
 - There is no password authentication. Access is via opaque bearer tokens (account_key,
-  agent_key) issued at registration. If lost, recover at the account level.
+  agent_key) issued at registration. Keys are not recoverable — store them safely and
+  rotate immediately if compromised.
 `)
   })
 }

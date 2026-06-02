@@ -802,3 +802,46 @@ describe('Handle verification (DNS-TXT)', () => {
     expect(res.json()).toMatchObject({ verified: false, domain: null })
   })
 })
+
+describe('DELETE /accounts/me', () => {
+  it('kills the account key, revokes agents, but preserves append-only key history', async () => {
+    const acct = await app.inject({ method: 'POST', url: '/accounts/register', payload: { handle: 'delowner' } })
+    const accountKey = acct.json().account_key
+    const { publicKey } = makeEd25519()
+    const agent = await app.inject({
+      method: 'POST', url: '/agents/register',
+      headers: { authorization: `Bearer ${accountKey}` },
+      payload: { name: 'doomed', public_key: publicKey },
+    })
+    const address = agent.json().address
+
+    const del = await app.inject({
+      method: 'DELETE', url: '/accounts/me',
+      headers: { authorization: `Bearer ${accountKey}` },
+    })
+    expect(del.statusCode).toBe(200)
+    expect(del.json().deleted).toBe(true)
+
+    // The account key is dead immediately.
+    const me = await app.inject({
+      method: 'GET', url: '/accounts/me',
+      headers: { authorization: `Bearer ${accountKey}` },
+    })
+    expect(me.statusCode).toBe(401)
+
+    // The agent resolves as revoked (main endpoint 404)...
+    const resolve = await app.inject({ method: 'GET', url: `/agents/${address}` })
+    expect(resolve.statusCode).toBe(404)
+
+    // ...but its append-only public-key history is preserved and marked revoked.
+    const hist = await app.inject({ method: 'GET', url: `/agents/${address}/key-history` })
+    expect(hist.statusCode).toBe(200)
+    expect(hist.json().revoked).toBe(true)
+    expect(hist.json().history.length).toBeGreaterThan(0)
+  })
+
+  it('rejects an unauthenticated delete', async () => {
+    const res = await app.inject({ method: 'DELETE', url: '/accounts/me' })
+    expect(res.statusCode).toBe(401)
+  })
+})

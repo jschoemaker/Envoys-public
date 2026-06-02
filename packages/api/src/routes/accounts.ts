@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify'
-import { randomUUID, randomBytes } from 'crypto'
+import { randomUUID } from 'crypto'
 import { promises as dns } from 'dns'
 import { db } from '../db.js'
 import type { Account } from '../db.js'
@@ -7,46 +7,6 @@ import { generateToken, hashToken } from '../crypto.js'
 import { requireAccountKey } from '../middleware/auth.js'
 import { getLimits } from '../limits.js'
 import { recordAudit } from '../usage.js'
-const FROM_EMAIL = process.env.FROM_EMAIL ?? 'Envoys <noreply@envoys.me>'
-const RESEND_API_KEY = process.env.RESEND_API_KEY ?? ''
-
-async function sendRecoveryEmail(to: string, recoveryUrl: string) {
-  if (!RESEND_API_KEY) {
-    console.log(`\n[Envoys Recovery] Link for ${to}:\n${recoveryUrl}\n`)
-    return
-  }
-
-  try {
-    const res = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${RESEND_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        from: FROM_EMAIL,
-        to,
-        subject: 'Recover your Envoys account',
-        html: `
-          <p>Hi,</p>
-          <p>Someone requested a recovery link for the Envoys account associated with this email.</p>
-          <p><a href="${recoveryUrl}">Click here to recover your account</a></p>
-          <p>This link expires in 30 minutes. If you didn't request this, you can ignore this email.</p>
-        `,
-      }),
-    })
-
-    if (!res.ok) {
-      const err = await res.text()
-      console.error(`[Envoys Recovery] Resend error for ${to}: ${err}`)
-    } else {
-      const data = await res.json() as { id: string }
-      console.log(`[Envoys Recovery] Email sent to ${to}, id: ${data.id}`)
-    }
-  } catch (err) {
-    console.error(`[Envoys Recovery] Failed to send email to ${to}:`, err)
-  }
-}
 
 // Reserved handles that cannot be claimed by users — vendor names, system names,
 // and obvious squat targets. Kept centralised so admin-side tooling can audit
@@ -306,6 +266,53 @@ export async function accountRoutes(app: FastifyInstance) {
     return { account_key: new_account_key }
   })
 
+  // Delete the authenticated account. Foreign keys are ON, and the append-only,
+  // verifier-facing public_key_history references agents — so we can neither
+  // hard-delete agents (it would force deleting their history) nor delete the
+  // account row (agents still reference it). Instead we:
+  //   - revoke every active agent and close its open key-history period, so each
+  //     address resolves as revoked and pinned verifiers can detect the change;
+  //   - delete the account's private records (custom domains, handle proofs, audit log);
+  //   - scrub the account row to a credential-less, PII-less tombstone that only
+  //     anchors the preserved agent/key-history data and keeps the handle reserved.
+  // The caller's account_key stops working immediately.
+  app.delete('/accounts/me', { preHandler: requireAccountKey }, async (req, reply) => {
+    const account = req.account!
+    const now     = Date.now()
+
+    db.exec('BEGIN')
+    try {
+      const agents = db
+        .prepare('SELECT id FROM agents WHERE account_id = ? AND revoked = 0')
+        .all(account.id) as Array<{ id: string }>
+      const revoke       = db.prepare('UPDATE agents SET revoked = 1, rotation_requested = 0 WHERE id = ?')
+      const closeHistory = db.prepare(
+        'UPDATE public_key_history SET valid_until = ? WHERE agent_id = ? AND valid_until IS NULL',
+      )
+      for (const a of agents) {
+        revoke.run(a.id)
+        closeHistory.run(now, a.id)
+      }
+
+      db.prepare('DELETE FROM custom_domains WHERE account_id = ?').run(account.id)
+      db.prepare('DELETE FROM handle_verifications WHERE account_id = ?').run(account.id)
+      db.prepare('DELETE FROM audit_events WHERE account_id = ?').run(account.id)
+
+      // Tombstone: clear PII and replace the key with an unusable value that is
+      // never returned, so this account can never authenticate again.
+      const deadKey = hashToken(generateToken('deleted'))
+      db.prepare('UPDATE accounts SET email = NULL, account_key = ? WHERE id = ?')
+        .run(deadKey, account.id)
+
+      db.exec('COMMIT')
+    } catch (e) {
+      db.exec('ROLLBACK')
+      throw e
+    }
+
+    return { deleted: true }
+  })
+
   // Recent audit events for the authenticated account. Surfaces sign-ins,
   // key rotations, agent register/revoke/rotation-request — everything a user
   // would scan to spot unauthorised activity.
@@ -439,51 +446,4 @@ export async function accountRoutes(app: FastifyInstance) {
     return { deleted: true }
   })
 
-  // Request an account recovery link via email.
-  app.post('/accounts/recover/request', async (req, reply) => {
-    const { email } = req.body as { email?: string }
-    if (!email) return reply.code(400).send({ error: 'email required' })
-    if (email.length > 254) return reply.code(400).send({ error: 'email must be 254 characters or fewer' })
-
-    const account = db.prepare('SELECT * FROM accounts WHERE email = ?').get(email) as Account | undefined
-
-    // Always return the same response — don't reveal whether the email exists
-    if (!account) {
-      return reply.send({ message: 'If that email is registered, a recovery link has been sent.' })
-    }
-
-    const token    = randomBytes(32).toString('hex')
-    const exp      = Date.now() + 30 * 60 * 1000 // 30 min
-
-    db.prepare('UPDATE accounts SET recovery_token = ?, recovery_token_exp = ? WHERE id = ?')
-      .run(hashToken(token), exp, account.id)
-
-    const recoveryUrl = `${process.env.BASE_URL ?? 'http://localhost:3000'}/app?recover=${token}`
-
-    await sendRecoveryEmail(email, recoveryUrl)
-
-    return reply.send({ message: 'If that email is registered, a recovery link has been sent.' })
-  })
-
-  // Validate recovery token and sign the user in.
-  app.get('/accounts/recover/:token', async (req, reply) => {
-    const { token } = req.params as { token: string }
-
-    const account = db.prepare(`
-      SELECT * FROM accounts
-      WHERE recovery_token = ? AND recovery_token_exp > ?
-    `).get(hashToken(token), Date.now()) as Account | undefined
-
-    if (!account) {
-      return reply.redirect('/app?auth_error=recovery_link_expired')
-    }
-
-    // Generate a fresh account_key — recovery is a key rotation event
-    const new_account_key = generateToken('ak')
-
-    db.prepare('UPDATE accounts SET account_key = ?, recovery_token = NULL, recovery_token_exp = NULL WHERE id = ?')
-      .run(hashToken(new_account_key), account.id)
-
-    return reply.redirect(`/app?ak=${new_account_key}`)
-  })
 }

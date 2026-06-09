@@ -2,8 +2,7 @@
   "schema": "envoys-rfc9421-fixture-manifest/v1",
   "extension_uri": "https://envoys.me/specs/signature/v1",
   "spec_version": "1.6.0",
-  "spec_commit": "85c63b3",
-  "spec_commit_note": "spec_commit pins the v1.5.0 text vec-1..6 were generated against; vec-7/vec-n4 target v1.6.0 — update this pin when the v1.6.0 spec text is committed",
+  "spec_commit": "054e89e",
   "keypair": "keypair.json",
   "vectors": [
     {
@@ -11,7 +10,10 @@
       "file": "positive/vec-1-get-no-body.json",
       "spec_ref": "v1.5.0 §14 Vector 1",
       "kind": "positive",
-      "covers": ["wire-signature", "no-body"],
+      "covers": [
+        "wire-signature",
+        "no-body"
+      ],
       "status": "computed"
     },
     {
@@ -19,16 +21,26 @@
       "file": "positive/vec-2-post-json-body.json",
       "spec_ref": "v1.5.0 §14 Vector 2",
       "kind": "positive",
-      "covers": ["wire-signature", "content-digest-sha256", "json-body"],
+      "covers": [
+        "wire-signature",
+        "content-digest-sha256",
+        "json-body"
+      ],
       "status": "computed",
-      "cross_validates_against": ["aeoess/aps-conformance-suite@c16aa04"]
+      "cross_validates_against": [
+        "aeoess/aps-conformance-suite@c16aa04"
+      ]
     },
     {
       "id": "vec-3-post-empty-body",
       "file": "positive/vec-3-post-empty-body.json",
       "spec_ref": "v1.5.0 §14 Vector 3",
       "kind": "positive",
-      "covers": ["wire-signature", "content-digest-sha256", "empty-json-object-body"],
+      "covers": [
+        "wire-signature",
+        "content-digest-sha256",
+        "empty-json-object-body"
+      ],
       "status": "computed"
     },
     {
@@ -36,7 +48,10 @@
       "file": "positive/vec-4-tag-param.json",
       "spec_ref": "v1.5.0 §4.3",
       "kind": "positive",
-      "covers": ["wire-signature", "tag-parameter-rfc9421-2.3"],
+      "covers": [
+        "wire-signature",
+        "tag-parameter-rfc9421-2.3"
+      ],
       "status": "computed"
     },
     {
@@ -44,7 +59,11 @@
       "file": "positive/vec-5-sha512-large-body.json",
       "spec_ref": "v1.5.0 §4.2 + §5.3",
       "kind": "positive",
-      "covers": ["wire-signature", "content-digest-sha512", "auto-promotion-at-4096-bytes"],
+      "covers": [
+        "wire-signature",
+        "content-digest-sha512",
+        "auto-promotion-at-4096-bytes"
+      ],
       "status": "computed"
     },
     {
@@ -52,7 +71,11 @@
       "file": "positive/vec-6-dual-shape-did-document.json",
       "spec_ref": "v1.5.0 §6.1",
       "kind": "positive",
-      "covers": ["wire-signature", "dual-shape-keyid", "did-document-resolution"],
+      "covers": [
+        "wire-signature",
+        "dual-shape-keyid",
+        "did-document-resolution"
+      ],
       "status": "inputs-only"
     },
     {
@@ -60,7 +83,11 @@
       "file": "positive/vec-7-authority-binding.json",
       "spec_ref": "v1.6.0 §4.2 + §5.5",
       "kind": "positive",
-      "covers": ["wire-signature", "authority-binding-rfc9421-2.2.3", "cross-host-relay-prevention"],
+      "covers": [
+        "wire-signature",
+        "authority-binding-rfc9421-2.2.3",
+        "cross-host-relay-prevention"
+      ],
       "status": "computed"
     },
     {
@@ -68,7 +95,9 @@
       "file": "negative/vec-n1-content-digest-mismatch.json",
       "spec_ref": "v1.5.0 §5.3",
       "kind": "negative",
-      "covers": ["body-integrity"],
+      "covers": [
+        "body-integrity"
+      ],
       "expected_error_code": "-32001",
       "failure_layer": "wire",
       "status": "defined"
@@ -78,7 +107,9 @@
       "file": "negative/vec-n2-expired-timestamp.json",
       "spec_ref": "v1.5.0 §5.2",
       "kind": "negative",
-      "covers": ["timestamp-freshness"],
+      "covers": [
+        "timestamp-freshness"
+      ],
       "expected_error_code": "-32001",
       "failure_layer": "wire",
       "status": "defined"
@@ -88,7 +119,9 @@
       "file": "negative/vec-n3-replay.json",
       "spec_ref": "v1.5.0 §7",
       "kind": "negative",
-      "covers": ["replay-protection"],
+      "covers": [
+        "replay-protection"
+      ],
       "expected_error_code": "-32001",
       "failure_layer": "wire",
       "status": "defined"
@@ -98,7 +131,10 @@
       "file": "negative/vec-n4-component-omission.json",
       "spec_ref": "v1.6.0 §5.5",
       "kind": "negative",
-      "covers": ["component-coverage-enforcement", "digest-downgrade"],
+      "covers": [
+        "component-coverage-enforcement",
+        "digest-downgrade"
+      ],
       "expected_error_code": "-32001",
       "failure_layer": "wire",
       "status": "defined"

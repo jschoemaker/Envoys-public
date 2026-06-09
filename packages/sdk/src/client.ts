@@ -143,13 +143,30 @@ export class Envoys {
       privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
     })
 
+    // Proof-of-possession: sign a timestamped challenge with the new private
+    // key so the registry can record that the registrant actually controls
+    // the key it is binding to the address (surfaced to verifiers as
+    // pop_verified). Costs nothing here — we just generated the key.
+    const popCreated = Math.floor(Date.now() / 1000)
+    const pop = cryptoSign(
+      null,
+      Buffer.from(`envoys-pop:v1:${popCreated}:${publicKey}`),
+      createPrivateKey(privateKey),
+    ).toString('base64')
+
     const res = await fetch(`${baseUrl}/agents/register`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${opts.accountKey}`,
       },
-      body: JSON.stringify({ name: opts.name, public_key: publicKey, capabilities: opts.capabilities ?? [] }),
+      body: JSON.stringify({
+        name: opts.name,
+        public_key: publicKey,
+        capabilities: opts.capabilities ?? [],
+        pop,
+        pop_created: popCreated,
+      }),
     })
 
     if (!res.ok) {
@@ -220,16 +237,27 @@ export class Envoys {
   //         keyid. Optional; verifiers MAY use it to enforce signing-context
   //         expectations. Absent tag is equivalent to tag="a2a-message" for
   //         downstream compatibility.
-  signRequest(method: string, path: string, body?: object, opts?: { tag?: string }): Record<string, string> {
+  //   authority — host (and optional port) of the target server, e.g.
+  //         "receiver.example.com". When provided, the signature additionally
+  //         covers RFC 9421 @authority, binding it to that host: a signature
+  //         minted for one service can no longer be relayed to another within
+  //         the timestamp window. Opt-in for wire compatibility with v1.5
+  //         verifiers; will become the default in a future spec version.
+  signRequest(method: string, path: string, body?: object, opts?: { tag?: string; authority?: string }): Record<string, string> {
     if (!this.privateKey) throw new Error('No private key — provide privateKey in EnvoysConfig')
 
     const keyid      = `${this.baseUrl}/agents/${this.address}`
     const created    = Math.floor(Date.now() / 1000)
     const nonce      = randomBytes(16).toString('base64url')  // 22-char unique tag
-    const components = ['"@method"', '"@path"', '"content-digest"']
+    const authority  = opts?.authority?.toLowerCase()  // RFC 9110: host is case-insensitive, canonicalize low
+    const components = authority
+      ? ['"@method"', '"@authority"', '"@path"', '"content-digest"']
+      : ['"@method"', '"@path"', '"content-digest"']
     const headers: Record<string, string> = {}
 
-    let sigBase = `"@method": ${method.toUpperCase()}\n"@path": ${path}\n`
+    let sigBase = `"@method": ${method.toUpperCase()}\n`
+    if (authority) sigBase += `"@authority": ${authority}\n`
+    sigBase += `"@path": ${path}\n`
 
     // Per spec §4.2 + §14: content-digest is signed for every request. For
     // no-body requests the digest is over zero bytes (sha-256 of empty =
@@ -296,8 +324,7 @@ export class Envoys {
       const keyid     = header.kid as string
       const agentsIdx = keyid.indexOf('/agents/')
       if (agentsIdx === -1) return { verified: false, keyid, error: 'kid is not an Envoys agent URL' }
-      const address   = keyid.slice(agentsIdx + '/agents/'.length)
-      const keyidBase = keyid.slice(0, agentsIdx)
+      const address = keyid.slice(agentsIdx + '/agents/'.length)
 
       const publicKeyPem = await Envoys.resolveKeyFromKeyid(keyid)
       const key = createPublicKey(publicKeyPem)
@@ -398,8 +425,7 @@ export class Envoys {
       // on every subsequent failure path.
       const agentsIdx = keyid.indexOf('/agents/')
       if (agentsIdx === -1) return fail('keyid is not an Envoys agent URL', { keyid })
-      const address   = keyid.slice(agentsIdx + '/agents/'.length)
-      const keyidBase = keyid.slice(0, agentsIdx)
+      const address = keyid.slice(agentsIdx + '/agents/'.length)
 
       // Reject signatures older than 5 minutes
       const age = Math.floor(Date.now() / 1000) - parseInt(created, 10)
@@ -442,11 +468,37 @@ export class Envoys {
       // Parse component names from '"@method" "@path" ...'
       const components = (componentsStr.match(/"([^"]+)"/g) ?? []).map(s => s.slice(1, -1))
 
+      // Spec §4.2 / §5: the signature must cover the core component set —
+      // @method and @path always; content-digest whenever the request has a
+      // body. Without this check, a signer could omit content-digest from the
+      // covered components and an attacker could then swap the body and the
+      // Content-Digest header consistently: the digest comparison above would
+      // pass while the signature stayed valid — leaving the body effectively
+      // unauthenticated.
+      if (!components.includes('@method') || !components.includes('@path')) {
+        return fail('Signature must cover @method and @path', { keyid, address })
+      }
+      if (body !== undefined && !components.includes('content-digest')) {
+        return fail('Signature must cover content-digest for requests with a body', { keyid, address })
+      }
+
       // Reconstruct signature base — must match signRequest() exactly
       let sigBase = ''
       for (const c of components) {
         if (c === '@method')        sigBase += `"@method": ${method.toUpperCase()}\n`
         else if (c === '@path')     sigBase += `"@path": ${path}\n`
+        else if (c === '@authority') {
+          // The verifier supplies its own authority — options.authority if the
+          // caller knows it (e.g. behind a proxy), otherwise the Host header.
+          // Reconstructing from the receiver's identity rather than anything
+          // the sender controls is the point: a signature minted for another
+          // host produces a different base here and fails verification.
+          const authority = (options.authority ?? h['host'])?.toLowerCase()
+          if (!authority) {
+            return fail('Signature covers @authority but no Host header or options.authority available', { keyid, address })
+          }
+          sigBase += `"@authority": ${authority}\n`
+        }
         else if (c === 'content-digest') {
           const cd = h['content-digest']
           if (!cd) return fail('Missing Content-Digest header', { keyid, address })

@@ -1,0 +1,23 @@
+{
+  "id": "vec-7-authority-binding",
+  "spec_ref": "v1.6.0 §4.2 + §5.5",
+  "description": "POST request whose signature additionally covers @authority (OPTIONAL, RECOMMENDED per v1.6.0 §4.2). The component value is the lowercased target host, ordered between @method and @path. A verifier reconstructs the value from its own configured authority or the request's Host header — a verifier serving any other host computes a different signature base and the signature fails, closing the cross-host relay window. Same body and keypair as vec-2.",
+  "inputs": {
+    "method": "POST",
+    "authority": "receiver.example.com",
+    "path": "/api/task",
+    "body": {"task":"summarize","url":"https://example.com/doc"},
+    "body_serialization": "JSON.stringify with no spaces — the exact bytes the Content-Digest covers",
+    "body_bytes_utf8": "{\"task\":\"summarize\",\"url\":\"https://example.com/doc\"}",
+    "keyid": "https://envoys.me/agents/test@rfc8032-vec1.example",
+    "created": 1714000300,
+    "nonce": "QUJDREVGR0hJSktMTU5PUA"
+  },
+  "expected": {
+    "content_digest": "sha-256=:MKfdDhv01pOYGoZ8VKY5CNdevySMUL8MqvJxVJaaWu0=:",
+    "signature_input": "sig1=(\"@method\" \"@authority\" \"@path\" \"content-digest\");keyid=\"https://envoys.me/agents/test@rfc8032-vec1.example\";created=1714000300;nonce=\"QUJDREVGR0hJSktMTU5PUA\"",
+    "signature_base": "\"@method\": POST\n\"@authority\": receiver.example.com\n\"@path\": /api/task\n\"content-digest\": sha-256=:MKfdDhv01pOYGoZ8VKY5CNdevySMUL8MqvJxVJaaWu0=:\n\"@signature-params\": (\"@method\" \"@authority\" \"@path\" \"content-digest\");keyid=\"https://envoys.me/agents/test@rfc8032-vec1.example\";created=1714000300;nonce=\"QUJDREVGR0hJSktMTU5PUA\"",
+    "signature": "moAIVt66Z/HaP2r0058pglAPZ2d6WbGFCTprGzGTTIitNc2E59LV2+PFxXykoYYqmTNiZ8c39aPPfzfZismhCg==",
+    "verifier_note": "Verifies only when the verifier's own authority is receiver.example.com. A verifier at evil.example.com reconstructs \"@authority\": evil.example.com and MUST fail signature verification."
+  }
+}

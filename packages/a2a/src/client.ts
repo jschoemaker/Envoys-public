@@ -13,6 +13,12 @@ import type {
 export interface A2AClientOptions {
   envoys:    Envoys
   endpoint:  string  // remote A2A URL, e.g. https://other.example.com/
+  // Cover RFC 9421 @authority (the endpoint's host) in the signature, scoping
+  // it to that one receiving service — a relayed signature fails on any other
+  // host. Opt-in: receivers verifying with @envoys/sdk < 0.9.0 reject
+  // signatures covering components they don't reconstruct, so enable this only
+  // when you know the receiver is current. Spec v1.6.0 §4.2.
+  bindAuthority?: boolean
 }
 
 export interface SendOptions {
@@ -74,6 +80,7 @@ export function createA2AClient(opts: A2AClientOptions): A2AClient {
   const { envoys, endpoint } = opts
   const url  = new URL(endpoint)
   const path = url.pathname && url.pathname !== '' ? url.pathname : '/'
+  const authority = opts.bindAuthority ? url.host : undefined
 
   return {
     async send(input) {
@@ -83,7 +90,7 @@ export function createA2AClient(opts: A2AClientOptions): A2AClient {
       }
 
       const envelope   = buildEnvelope(parts)
-      const sigHeaders = envoys.signRequest('POST', path, envelope)
+      const sigHeaders = envoys.signRequest('POST', path, envelope, authority ? { authority } : undefined)
 
       const res = await fetch(endpoint, {
         method: 'POST',

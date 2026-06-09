@@ -1,6 +1,6 @@
 {
   "name": "@envoys/a2a",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "A2A (Agent2Agent) adapter for Envoys — signed JSON-RPC over RFC 9421.",
   "type": "module",
   "main": "dist/index.js",

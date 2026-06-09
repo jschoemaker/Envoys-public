@@ -53,7 +53,7 @@ function contentDigest(body) {
 // Reconstruct the RFC 9421 signature base from a Signature-Input value plus the
 // request line and Content-Digest value. null on a malformed header or an
 // unrecognized component.
-function reconstructBase(sigInput, method, path, cdValue) {
+function reconstructBase(sigInput, method, path, cdValue, authority) {
   const m = sigInput.match(/^sig1=\(([^)]*)\)(.*)$/)
   if (!m) return null
   const components = (m[1].match(/"([^"]+)"/g) ?? []).map(s => s.slice(1, -1))
@@ -61,6 +61,10 @@ function reconstructBase(sigInput, method, path, cdValue) {
   for (const c of components) {
     if (c === '@method')             base += `"@method": ${method.toUpperCase()}\n`
     else if (c === '@path')          base += `"@path": ${path}\n`
+    else if (c === '@authority') {
+      if (!authority) return null
+      base += `"@authority": ${authority.toLowerCase()}\n`
+    }
     else if (c === 'content-digest') base += `"content-digest": ${cdValue}\n`
     else return null
   }
@@ -77,7 +81,7 @@ function verifyPositive(v) {
   if (cd !== v.expected.content_digest)
     return { ok: false, msg: `Content-Digest mismatch — computed ${cd}` }
 
-  const base = reconstructBase(v.expected.signature_input, v.method, v.path, cd)
+  const base = reconstructBase(v.expected.signature_input, v.method, v.path, cd, v.authority)
   if (base !== v.expected.signature_base)
     return { ok: false, msg: 'signature_base does not reconstruct from signature_input + request line + digest' }
 
@@ -118,6 +122,25 @@ function verifyNegative(v) {
     if (!valid) return { ok: false, msg: 'signature does not verify — a replay fixture must carry a genuine signature' }
     return { ok: true, msg: `${v.specRef} — signature genuinely valid; §7 dedup cache must reject the replayed tuple (${v.code})` }
   }
+  if (v.cover === 'component-coverage-enforcement') {
+    // The fixture is only meaningful if every OTHER check passes — the digest
+    // agrees with the received body and the signature is genuinely valid over
+    // the covered subset — so §5.5 component-coverage is the sole rejection path.
+    const h          = v.inputs.headers_received
+    const components = (h['Signature-Input'].match(/^sig1=\(([^)]*)\)/)?.[1].match(/"([^"]+)"/g) ?? [])
+      .map(s => s.slice(1, -1))
+    if (components.includes('content-digest'))
+      return { ok: false, msg: 'content-digest IS covered — not a component-omission fixture' }
+    const recomputed = contentDigest(Buffer.from(v.inputs.body_received_bytes_utf8, 'utf8'))
+    if (recomputed !== h['Content-Digest'])
+      return { ok: false, msg: 'Content-Digest does not match received body — would be caught by §5.3, not §5.5' }
+    const sigB64 = h['Signature'].match(/^sig1=:(.+):$/)?.[1]
+    const base   = reconstructBase(h['Signature-Input'], v.inputs.method, v.inputs.path, h['Content-Digest'])
+    if (!base || !sigB64) return { ok: false, msg: 'could not reconstruct base / signature from headers_received' }
+    const valid = cryptoVerify(null, Buffer.from(base), createPublicKey(RFC8032_PUBKEY_PEM), Buffer.from(sigB64, 'base64'))
+    if (!valid) return { ok: false, msg: 'signature invalid over the covered subset — fixture must isolate the §5.5 check' }
+    return { ok: true, msg: `${v.specRef} — digest agrees, signature valid over covered subset, content-digest omitted → §5.5 component-coverage is the sole rejection path (${v.code})` }
+  }
   return { ok: false, msg: `unknown negative-vector cover "${v.cover}"` }
 }
 
@@ -140,6 +163,7 @@ function loadEnvoys(dir) {
       positives.push({
         id: m.id, specRef: m.spec_ref,
         method: i.method, path: i.path, body,
+        authority: i.authority,  // present only on @authority-binding vectors (v1.6.0 §4.2)
         expected: v.expected, pubKeyPem: pem,
       })
     } else {

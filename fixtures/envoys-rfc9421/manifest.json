@@ -1,8 +1,9 @@
 {
   "schema": "envoys-rfc9421-fixture-manifest/v1",
   "extension_uri": "https://envoys.me/specs/signature/v1",
-  "spec_version": "1.5.0",
+  "spec_version": "1.6.0",
   "spec_commit": "85c63b3",
+  "spec_commit_note": "spec_commit pins the v1.5.0 text vec-1..6 were generated against; vec-7/vec-n4 target v1.6.0 — update this pin when the v1.6.0 spec text is committed",
   "keypair": "keypair.json",
   "vectors": [
     {
@@ -55,6 +56,14 @@
       "status": "inputs-only"
     },
     {
+      "id": "vec-7-authority-binding",
+      "file": "positive/vec-7-authority-binding.json",
+      "spec_ref": "v1.6.0 §4.2 + §5.5",
+      "kind": "positive",
+      "covers": ["wire-signature", "authority-binding-rfc9421-2.2.3", "cross-host-relay-prevention"],
+      "status": "computed"
+    },
+    {
       "id": "vec-n1-content-digest-mismatch",
       "file": "negative/vec-n1-content-digest-mismatch.json",
       "spec_ref": "v1.5.0 §5.3",
@@ -80,6 +89,16 @@
       "spec_ref": "v1.5.0 §7",
       "kind": "negative",
       "covers": ["replay-protection"],
+      "expected_error_code": "-32001",
+      "failure_layer": "wire",
+      "status": "defined"
+    },
+    {
+      "id": "vec-n4-component-omission",
+      "file": "negative/vec-n4-component-omission.json",
+      "spec_ref": "v1.6.0 §5.5",
+      "kind": "negative",
+      "covers": ["component-coverage-enforcement", "digest-downgrade"],
       "expected_error_code": "-32001",
       "failure_layer": "wire",
       "status": "defined"

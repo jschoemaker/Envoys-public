@@ -67,6 +67,17 @@ const VECTORS = [
     method: 'POST', path: '/api/task',
     body: Buffer.from('{"task":"summarize","url":"https://example.com/doc"}'),
     created: 1714000060, nonce: 'EBESExQVFhcYGRobHB0eHw' },
+
+  // vec-7: spec v1.6.0 §4.2 OPTIONAL @authority binding. Same body as vec-2;
+  // the component list gains "@authority" between @method and @path, valued
+  // as the lowercased target host. Verifiers reconstruct the value from their
+  // own configured authority or the Host header (§5.5) — a verifier serving
+  // any other host computes a different base and the signature fails.
+  { file: 'positive/vec-7-authority-binding.json',
+    method: 'POST', path: '/api/task',
+    body: Buffer.from('{"task":"summarize","url":"https://example.com/doc"}'),
+    created: 1714000300, nonce: 'QUJDREVGR0hJSktMTU5PUA',
+    authority: 'receiver.example.com' },
 ]
 
 // RFC 9530 Content-Digest. SHA-256 by default; auto-promote to SHA-512 for
@@ -88,9 +99,13 @@ function compute(v) {
     const escaped = v.tag.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
     params += `;tag="${escaped}"`
   }
-  const sigParams = `("@method" "@path" "content-digest");${params}`
+  const componentList = v.authority
+    ? '("@method" "@authority" "@path" "content-digest")'
+    : '("@method" "@path" "content-digest")'
+  const sigParams = `${componentList};${params}`
   const base =
     `"@method": ${v.method.toUpperCase()}\n` +
+    (v.authority ? `"@authority": ${v.authority}\n` : '') +
     `"@path": ${v.path}\n` +
     `"content-digest": ${cd}\n` +
     `"@signature-params": ${sigParams}`

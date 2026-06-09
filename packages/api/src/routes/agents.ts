@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify'
-import { randomUUID, createPublicKey } from 'crypto'
+import { randomUUID, createPublicKey, verify as cryptoVerify } from 'crypto'
 import { db } from '../db.js'
 import type { Agent } from '../db.js'
 import { generateToken, hashToken } from '../crypto.js'
@@ -100,11 +100,13 @@ export async function agentRoutes(app: FastifyInstance) {
       return reply.code(status).send({ error: message })
     }
 
-    const { name, public_key, capabilities = [], domain } = req.body as {
+    const { name, public_key, capabilities = [], domain, pop, pop_created } = req.body as {
       name?: string
       public_key?: string
       capabilities?: string[]
       domain?: string
+      pop?: string
+      pop_created?: number
     }
     if (!name) return failed('name_missing', 400, 'name required')
     if (!public_key) return failed('pubkey_missing', 400, 'public_key required (generate an Ed25519 keypair and send the public key)')
@@ -118,13 +120,40 @@ export async function agentRoutes(app: FastifyInstance) {
     if (domain && domain.length > 253) return failed('domain_too_long', 400, 'domain must be 253 characters or fewer')
 
     // Validate the submitted public key is a real Ed25519 key
+    let keyObj
     try {
-      const key = createPublicKey(public_key)
-      if (key.asymmetricKeyType !== 'ed25519') {
+      keyObj = createPublicKey(public_key)
+      if (keyObj.asymmetricKeyType !== 'ed25519') {
         return failed('pubkey_not_ed25519', 400, 'public_key must be an Ed25519 key')
       }
     } catch {
       return failed('pubkey_invalid_pem', 400, 'public_key is not a valid PEM-encoded public key')
+    }
+
+    // Optional proof-of-possession: a signature over
+    // `envoys-pop:v1:<pop_created>:<public_key>` made with the private key
+    // matching the submitted public key. Without it, registration only proves
+    // the caller has *seen* a public key, not that they control it — verifiers
+    // pinning (address → public_key) assume the binding means control, so we
+    // surface pop_verified in resolver responses and let them decide. A bad
+    // proof is rejected outright (it signals a confused or hostile client);
+    // an absent proof registers with pop_verified = 0 for compatibility.
+    let popVerified = 0
+    if (pop !== undefined || pop_created !== undefined) {
+      if (typeof pop !== 'string' || typeof pop_created !== 'number') {
+        return failed('pop_malformed', 400, 'pop (base64 signature) and pop_created (unix seconds) must both be present')
+      }
+      const age = Math.floor(Date.now() / 1000) - pop_created
+      if (age > 300 || age < -30) {
+        return failed('pop_stale', 400, 'pop_created outside the acceptable window (300s past, 30s future)')
+      }
+      const popPayload = Buffer.from(`envoys-pop:v1:${pop_created}:${public_key}`)
+      let popOk = false
+      try { popOk = cryptoVerify(null, popPayload, keyObj, Buffer.from(pop, 'base64')) } catch { popOk = false }
+      if (!popOk) {
+        return failed('pop_invalid', 400, 'pop signature does not verify against the submitted public_key')
+      }
+      popVerified = 1
     }
 
     // Enforce agent count limit for this tier
@@ -166,9 +195,9 @@ export async function agentRoutes(app: FastifyInstance) {
     const now       = Date.now()
 
     db.prepare(`
-      INSERT INTO agents (id, account_id, name, address, agent_key, public_key, capabilities, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, account.id, name, address, hashToken(agent_key), public_key, JSON.stringify(capabilities), now)
+      INSERT INTO agents (id, account_id, name, address, agent_key, public_key, capabilities, pop_verified, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, account.id, name, address, hashToken(agent_key), public_key, JSON.stringify(capabilities), popVerified, now)
 
     db.prepare(`
       INSERT INTO public_key_history (agent_id, address, public_key, valid_from, valid_until, reason)
@@ -177,7 +206,7 @@ export async function agentRoutes(app: FastifyInstance) {
 
     recordAudit({ accountId: account.id, kind: 'agent.registered', detail: address, ip: req.ip ?? null })
 
-    return reply.code(201).send({ id, address, agent_key, public_key })
+    return reply.code(201).send({ id, address, agent_key, public_key, pop_verified: !!popVerified })
   })
 
   // List all agents under the authenticated account.
@@ -333,7 +362,7 @@ export async function agentRoutes(app: FastifyInstance) {
     }
 
     const agent = db
-      .prepare('SELECT address, public_key FROM agents WHERE address = ? AND revoked = 0')
+      .prepare('SELECT address, public_key, pop_verified FROM agents WHERE address = ? AND revoked = 0')
       .get(address) as any
 
     if (!agent) {
@@ -344,6 +373,7 @@ export async function agentRoutes(app: FastifyInstance) {
     return {
       address: agent.address,
       public_key: agent.public_key,
+      pop_verified: !!agent.pop_verified,
       ...resolveVerification(agent.address),
     }
   })
@@ -422,7 +452,7 @@ export async function agentRoutes(app: FastifyInstance) {
     const { address } = req.params as { address: string }
 
     const agent = db
-      .prepare('SELECT address, public_key FROM agents WHERE address = ? AND revoked = 0')
+      .prepare('SELECT address, public_key, pop_verified FROM agents WHERE address = ? AND revoked = 0')
       .get(address) as any
 
     if (!agent) {
@@ -441,6 +471,7 @@ export async function agentRoutes(app: FastifyInstance) {
     return {
       address: agent.address,
       public_key: agent.public_key,
+      pop_verified: !!agent.pop_verified,
       ...resolveVerification(agent.address),
     }
   })

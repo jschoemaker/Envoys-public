@@ -148,10 +148,21 @@ export async function accountRoutes(app: FastifyInstance) {
     const id          = randomUUID()
     const account_key = generateToken('ak')
 
-    db.prepare(`
-      INSERT INTO accounts (id, email, account_key, handle, created_at)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(id, email ?? null, hashToken(account_key), handle, Date.now())
+    // The checks above are advisory — two concurrent registrations can both
+    // pass them. The UNIQUE constraints are the real gate; surface a clean
+    // 409 instead of a 500 when the race loses.
+    try {
+      db.prepare(`
+        INSERT INTO accounts (id, email, account_key, handle, created_at)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(id, email ?? null, hashToken(account_key), handle, Date.now())
+    } catch (e: any) {
+      if (e?.message?.includes('UNIQUE')) {
+        const taken = e.message.includes('accounts.email') ? 'Email already registered' : 'Handle is already taken'
+        return reply.code(409).send({ error: taken })
+      }
+      throw e
+    }
 
     recordAudit({ accountId: id, kind: 'account.signin', detail: 'email (new account)', ip: req.ip ?? null })
 

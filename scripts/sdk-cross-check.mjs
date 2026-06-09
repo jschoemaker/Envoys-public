@@ -75,6 +75,7 @@ for (const id of [
   'vec-4-tag-param',
   'vec-5-sha512-large-body',
   'vec-6-dual-shape-did-document',
+  'vec-7-authority-binding',
 ]) {
   const v = JSON.parse(readFileSync(join(FIX, 'positive', `${id}.json`), 'utf8'))
   const { inputs, expected } = v
@@ -87,7 +88,10 @@ for (const id of [
   const headers = headersFromExpected(expected)
   const body = (inputs.body === null || inputs.body === undefined) ? undefined : inputs.body
 
-  const r = await Envoys.verifyRequest(inputs.method, inputs.path, headers, body)
+  // vec-7 covers @authority — the SDK reconstructs it from options.authority
+  // (or the Host header); pass the verifier-side authority the fixture pins.
+  const options = inputs.authority ? { authority: inputs.authority } : undefined
+  const r = await Envoys.verifyRequest(inputs.method, inputs.path, headers, body, options)
   restoreDateNow()
   restoreFetch()
 
@@ -132,6 +136,25 @@ console.log('\nNegative:')
   else                                           bad('vec-n2', 'verified=true — should have rejected')
 }
 
+// vec-n4 — component omission (digest downgrade). Digest header matches the
+// received body and the signature is valid over the covered subset; the SDK
+// must reject on §5.5 component-coverage, not verify.
+{
+  const v = JSON.parse(readFileSync(join(FIX, 'negative', 'vec-n4-component-omission.json'), 'utf8'))
+  const h = v.inputs.headers_received
+  const created = Number(h['Signature-Input'].match(/created=(\d+)/)[1])
+  clearCaches(); stubDateNow(created); stubFetchNative()
+  const r = await Envoys.verifyRequest(
+    v.inputs.method, v.inputs.path,
+    { 'signature-input': h['Signature-Input'], 'signature': h['Signature'], 'content-digest': h['Content-Digest'] },
+    v.inputs.body_received,
+  )
+  restoreDateNow(); restoreFetch()
+  if (!r.verified && /must cover content-digest/i.test(r.error)) ok('vec-n4', `rejected — ${r.error}`)
+  else if (!r.verified)                                          bad('vec-n4', `rejected, wrong reason — ${r.error}`)
+  else                                                           bad('vec-n4', 'verified=true — digest downgrade accepted')
+}
+
 // vec-n3 — replay. Verify once (must succeed), verify the identical request
 // again without clearing the replay cache (must reject).
 {
@@ -154,5 +177,5 @@ if (failures.length) {
   failures.forEach(f => console.log('  - ' + f))
   process.exit(1)
 }
-console.log('\n@envoys/sdk verifyRequest agrees with verify-fixtures.mjs on all 9 vectors.')
+console.log('\n@envoys/sdk verifyRequest agrees with verify-fixtures.mjs on all 11 vectors.')
 console.log('Two independent Envoys implementations corroborate the fixture set.')

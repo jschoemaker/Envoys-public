@@ -34,14 +34,25 @@ function pipeClientToHandler(
   handler: ReturnType<typeof createA2AHandler>,
 ) {
   return vi.fn().mockImplementation(async (url: string, init: RequestInit) => {
+    // Key resolution — both the legacy query-string endpoint and the keyid URL
+    // (GET /agents/<address>) that verifyRequest's resolveKeyFromKeyid fetches.
     if (url.includes('/agents/public-key')) {
       return { ok: true, json: async () => ({ public_key: publicKeyPem }) }
     }
-    const path = new URL(url).pathname || '/'
+    if (url.includes('/agents/') && (init?.method ?? 'GET') === 'GET') {
+      return {
+        ok: true,
+        headers: { get: () => 'application/json' },
+        json: async () => ({ public_key: publicKeyPem }),
+      }
+    }
+    const u = new URL(url)
     const out = await handler({
       method:  init.method ?? 'POST',
-      path,
-      headers: init.headers as Record<string, string>,
+      path:    u.pathname || '/',
+      // A real server sees the Host header from the connection — synthesize it
+      // from the URL so @authority-bound signatures reconstruct correctly.
+      headers: { host: u.host, ...(init.headers as Record<string, string>) },
       body:    JSON.parse(init.body as string),
     })
     return {
@@ -74,6 +85,21 @@ describe('createA2AClient + createA2AHandler', () => {
 
     expect(reply.text).toBe('Echo (verified alice@team.envoys.me): hello world')
     expect(reply.status).toBe('completed')
+  })
+
+  it('round-trips with bindAuthority — signature covers @authority and the handler verifies via Host', async () => {
+    const sender  = makeAgent('alice@team.envoys.me')
+    const handler = createA2AHandler({ onMessage: ({ text }) => `bound: ${text}` })
+    vi.stubGlobal('fetch', pipeClientToHandler('http://recv/', sender.publicKey, handler))
+
+    const client = createA2AClient({ envoys: sender.envoys, endpoint: 'http://recv/', bindAuthority: true })
+    const reply  = await client.send('hello')
+    expect(reply.text).toBe('bound: hello')
+
+    // The signed request actually covered @authority.
+    const calls = (globalThis.fetch as any).mock.calls
+    const sendCall = calls.find(([u]: [string]) => u === 'http://recv/')
+    expect(sendCall[1].headers['Signature-Input']).toContain('"@authority"')
   })
 
   it('handler exposes the verified sender address to onMessage', async () => {

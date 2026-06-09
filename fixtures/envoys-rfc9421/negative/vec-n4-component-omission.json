@@ -1,0 +1,26 @@
+{
+  "id": "vec-n4-component-omission",
+  "spec_ref": "v1.6.0 §5.5",
+  "description": "Digest-downgrade attempt: the signature is cryptographically valid but covers only (\"@method\" \"@path\") — content-digest is omitted from the covered components even though the request has a body. The attacker substitutes the body AND a Content-Digest header that matches the new body, so the §5.3 body-integrity check passes (header and body agree) while the signature still verifies over the components it covers. A conformant v1.6.0 verifier MUST reject per §5.5 component-coverage enforcement: requests with a body MUST have content-digest among the covered components. Verifiers MUST NOT treat §5.3 digest agreement as body authentication — only the signature's coverage of the Content-Digest header binds the body to the signer.",
+  "inputs": {
+    "method": "POST",
+    "path": "/api/task",
+    "body_received": {"task":"DELETE-ALL","url":"https://attacker.example.com/exfil"},
+    "body_received_bytes_utf8": "{\"task\":\"DELETE-ALL\",\"url\":\"https://attacker.example.com/exfil\"}",
+    "headers_received": {
+      "Content-Digest": "sha-256=:Yhc3jGVrSGd9Md9H4Ov0YgX+dkObONFjffkAYTNfNT4=:",
+      "Signature-Input": "sig1=(\"@method\" \"@path\");keyid=\"https://envoys.me/agents/test@rfc8032-vec1.example\";created=1714000360;nonce=\"UlNUVVZXWFlaYWJjZGVmZw\"",
+      "Signature": "sig1=:JfiY02oHSbROwVCDQIv4ZoHk94S67y39xBci/qUr6k2V11rVKBNZYChuZrE8OESpy/Kmv5oAGpxougvVaDScDA==:"
+    },
+    "signature_base_as_signed": "\"@method\": POST\n\"@path\": /api/task\n\"@signature-params\": (\"@method\" \"@path\");keyid=\"https://envoys.me/agents/test@rfc8032-vec1.example\";created=1714000360;nonce=\"UlNUVVZXWFlaYWJjZGVmZw\"",
+    "tampering": "The Content-Digest header matches the received body (attacker recomputed it), and the Ed25519 signature is valid over the two components it covers. The only conformant rejection path is the §5.5 component-coverage check."
+  },
+  "expected": {
+    "http_status": 401,
+    "error_code": "-32001",
+    "failure_layer": "wire",
+    "failure_field": "covered-components",
+    "rejection_stage": "pre-signature-verification",
+    "verifier_behavior": "Parse covered components from Signature-Input → request has a body but \"content-digest\" is not among them → reject with -32001. Do NOT accept based on §5.3 digest agreement plus a valid signature over the covered subset."
+  }
+}

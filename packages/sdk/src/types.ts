@@ -68,6 +68,12 @@ export interface VerifyRequestOptions {
 
   // Override the default in-process pin store with persistent storage.
   pinStore?: PinStore
+
+  // The authority (host, optionally host:port) this verifier is serving.
+  // Used to reconstruct the @authority component when a signature covers it.
+  // If omitted, the request's Host header is used. Set this explicitly when
+  // running behind a proxy that rewrites Host.
+  authority?: string
 }
 
 export interface VerifyAgentCardResult {

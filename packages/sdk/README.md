@@ -79,12 +79,25 @@ Replay protection: the SDK rejects signatures older than 5 minutes, more than 30
 
 ### Verifier-side safety defaults
 
-`Envoys.verifyRequest()` enforces two checks on top of cryptographic verification:
+`Envoys.verifyRequest()` enforces three checks on top of cryptographic verification:
 
+- **Component-coverage enforcement** — signatures must cover `@method` and `@path`, plus `content-digest` whenever the request has a body. A signature that omits `content-digest` leaves the body unauthenticated (an attacker can substitute body + matching header consistently), so it is rejected even if cryptographically valid. Spec §5.5.
 - **Public-key pinning (on by default)** — first-seen public key is auto-recorded per address; subsequent contact with a different key fails verification with a clear `Envoys.resetPin('<address>')` hint. Catches account-compromise rotations that would otherwise resolve cleanly.
 - **Optional allowlist** — pass `{ allowlist: [...] }` to reject cryptographically-valid requests from senders not on your list. The allowlist matches against keyid OR address.
 
 Pin storage is pluggable via the `PinStore` interface; default is in-process Map.
+
+> **Scaling note:** the default pin store and the replay-dedup cache are both in-process. On a single instance they do what they promise; behind a load balancer each instance has its own view — a replayed signature hitting a different instance looks novel, and pins don't propagate. Horizontally-scaled verifiers should pass a shared `pinStore` (Redis, a table, anything that implements `PinStore`) and put replay dedup behind shared state or sticky routing.
+
+### Optional: bind the signature to the target host (`@authority`)
+
+By default the signature covers method, path, and body — which means a signature minted for `POST /rpc` on one host is valid for the same method and path on **any** host within the 5-minute window. Pass `authority` to additionally cover RFC 9421 `@authority` and scope the signature to one receiving service:
+
+```ts
+const headers = agent.signRequest('POST', '/rpc', body, { authority: 'receiver.example.com' })
+```
+
+The verifier reconstructs `@authority` from its own identity — `options.authority` if set (do this behind a proxy that rewrites Host), otherwise the request's `Host` header — so a relayed signature fails on any other host. Opt-in for now: verifiers older than 0.9.0 reject signatures covering components they don't reconstruct, so only send it to receivers you know are current. Spec v1.6.0 §4.2.
 
 ### Dual-shape keyid resolution (W3C DID interop)
 

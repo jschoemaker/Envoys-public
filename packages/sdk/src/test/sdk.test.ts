@@ -186,6 +186,114 @@ describe('verifyRequest', () => {
     expect(result.error).toMatch(/Signature/)
   })
 
+  it('rejects a bodied request whose signature does not cover content-digest (downgrade attack)', async () => {
+    const { publicKey, privateKey } = makeEd25519()
+    const agent = new Envoys({ agentKey: 'agt_test', address: 'sender@team.envoys.me', publicKey, privateKey })
+    const body = { message: 'original' }
+
+    // Forge a signature that legitimately covers only @method and @path —
+    // signed correctly with the real key, but leaving the body uncovered.
+    const { createPrivateKey, sign: cryptoSign, createHash } = await import('crypto')
+    const keyid   = 'https://envoys.me/agents/sender@team.envoys.me'
+    const created = Math.floor(Date.now() / 1000)
+    const params  = `;keyid="${keyid}";created=${created};nonce="forged-nonce-1"`
+    const sigBase = `"@method": POST\n"@path": /\n"@signature-params": ("@method" "@path")${params}`
+    const sig     = cryptoSign(null, Buffer.from(sigBase), createPrivateKey(privateKey)).toString('base64')
+
+    // Attacker swaps the body and sets a Content-Digest that matches the new
+    // body — consistent digest, valid signature, body not actually signed.
+    const tampered = { message: 'tampered' }
+    const digest   = createHash('sha256').update(Buffer.from(JSON.stringify(tampered))).digest('base64')
+    const headers = {
+      'Signature-Input': `sig1=("@method" "@path")${params}`,
+      'Signature':       `sig1=:${sig}:`,
+      'Content-Digest':  `sha-256=:${digest}:`,
+    }
+    vi.stubGlobal('fetch', mockFetch(publicKey))
+
+    const result = await Envoys.verifyRequest('POST', '/', headers as any, tampered)
+    expect(result.verified).toBe(false)
+    expect(result.error).toMatch(/must cover content-digest/)
+  })
+
+  it('rejects a signature that does not cover @method and @path', async () => {
+    const { publicKey, privateKey } = makeEd25519()
+    const { createPrivateKey, sign: cryptoSign } = await import('crypto')
+    const keyid   = 'https://envoys.me/agents/sender@team.envoys.me'
+    const created = Math.floor(Date.now() / 1000)
+    const params  = `;keyid="${keyid}";created=${created};nonce="forged-nonce-2"`
+    const emptyDigest = '47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU='
+    const sigBase = `"content-digest": sha-256=:${emptyDigest}:\n"@signature-params": ("content-digest")${params}`
+    const sig     = cryptoSign(null, Buffer.from(sigBase), createPrivateKey(privateKey)).toString('base64')
+    const headers = {
+      'Signature-Input': `sig1=("content-digest")${params}`,
+      'Signature':       `sig1=:${sig}:`,
+      'Content-Digest':  `sha-256=:${emptyDigest}:`,
+    }
+    vi.stubGlobal('fetch', mockFetch(publicKey))
+
+    const result = await Envoys.verifyRequest('GET', '/path', headers as any)
+    expect(result.verified).toBe(false)
+    expect(result.error).toMatch(/must cover @method and @path/)
+  })
+
+  it('round-trips an @authority-bound signature when the verifier authority matches', async () => {
+    const { publicKey, privateKey } = makeEd25519()
+    const agent = new Envoys({ agentKey: 'agt_test', address: 'sender@team.envoys.me', publicKey, privateKey })
+    const body = { hello: 'world' }
+    const sigHeaders = agent.signRequest('POST', '/rpc', body, { authority: 'receiver.example.com' })
+    expect(sigHeaders['Signature-Input']).toContain('"@authority"')
+    vi.stubGlobal('fetch', mockFetch(publicKey))
+
+    const result = await Envoys.verifyRequest('POST', '/rpc', sigHeaders as any, body, { authority: 'receiver.example.com' })
+    expect(result.verified).toBe(true)
+  })
+
+  it('rejects an @authority-bound signature relayed to a different host', async () => {
+    const { publicKey, privateKey } = makeEd25519()
+    const agent = new Envoys({ agentKey: 'agt_test', address: 'sender@team.envoys.me', publicKey, privateKey })
+    const body = { hello: 'world' }
+    const sigHeaders = agent.signRequest('POST', '/rpc', body, { authority: 'receiver.example.com' })
+    vi.stubGlobal('fetch', mockFetch(publicKey))
+
+    const result = await Envoys.verifyRequest('POST', '/rpc', sigHeaders as any, body, { authority: 'evil.example.com' })
+    expect(result.verified).toBe(false)
+  })
+
+  it('falls back to the Host header to reconstruct @authority', async () => {
+    const { publicKey, privateKey } = makeEd25519()
+    const agent = new Envoys({ agentKey: 'agt_test', address: 'sender@team.envoys.me', publicKey, privateKey })
+    const sigHeaders = agent.signRequest('GET', '/data', undefined, { authority: 'Receiver.Example.com' })
+
+    vi.stubGlobal('fetch', mockFetch(publicKey))
+    // Host header casing differs — both sides canonicalize to lowercase.
+    const headers = { ...sigHeaders, Host: 'receiver.example.com' }
+    const result = await Envoys.verifyRequest('GET', '/data', headers as any)
+    expect(result.verified).toBe(true)
+  })
+
+  it('fails clearly when @authority is covered but neither Host nor options.authority is available', async () => {
+    const { publicKey, privateKey } = makeEd25519()
+    const agent = new Envoys({ agentKey: 'agt_test', address: 'sender@team.envoys.me', publicKey, privateKey })
+    const sigHeaders = agent.signRequest('GET', '/data', undefined, { authority: 'receiver.example.com' })
+    vi.stubGlobal('fetch', mockFetch(publicKey))
+
+    const result = await Envoys.verifyRequest('GET', '/data', sigHeaders as any)
+    expect(result.verified).toBe(false)
+    expect(result.error).toMatch(/@authority/)
+  })
+
+  it('plain signatures without @authority still verify (v1.5 compat)', async () => {
+    const { publicKey, privateKey } = makeEd25519()
+    const agent = new Envoys({ agentKey: 'agt_test', address: 'sender@team.envoys.me', publicKey, privateKey })
+    const sigHeaders = agent.signRequest('GET', '/data')
+    expect(sigHeaders['Signature-Input']).not.toContain('@authority')
+    vi.stubGlobal('fetch', mockFetch(publicKey))
+
+    const result = await Envoys.verifyRequest('GET', '/data', sigHeaders as any)
+    expect(result.verified).toBe(true)
+  })
+
   it('rejects when the signature does not verify against the public key', async () => {
     const { publicKey, privateKey } = makeEd25519()
     const { publicKey: wrongKey } = makeEd25519()  // different key
@@ -196,6 +304,37 @@ describe('verifyRequest', () => {
 
     const result = await Envoys.verifyRequest('GET', '/path', sigHeaders as any)
     expect(result.verified).toBe(false)
+  })
+})
+
+// ── Envoys.register ──────────────────────────────────────────────────────────
+
+describe('Envoys.register', () => {
+  it('sends a valid proof-of-possession alongside the generated public key', async () => {
+    const { createPublicKey, verify: cryptoVerify } = await import('crypto')
+    let captured: any
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async (_url: string, init: any) => {
+      captured = JSON.parse(init.body)
+      return {
+        ok: true,
+        json: async () => ({ id: 'id-1', address: 'reg-agent@h.envoys.me', agent_key: 'agt_new' }),
+      }
+    }))
+
+    const { result } = await Envoys.register({ accountKey: 'ak_test', name: 'reg-agent' })
+    vi.unstubAllGlobals()
+
+    expect(captured.public_key).toBe(result.publicKey)
+    expect(typeof captured.pop).toBe('string')
+    expect(typeof captured.pop_created).toBe('number')
+    // The pop must verify against the submitted public key over the canonical payload.
+    const ok = cryptoVerify(
+      null,
+      Buffer.from(`envoys-pop:v1:${captured.pop_created}:${captured.public_key}`),
+      createPublicKey(captured.public_key),
+      Buffer.from(captured.pop, 'base64'),
+    )
+    expect(ok).toBe(true)
   })
 })
 

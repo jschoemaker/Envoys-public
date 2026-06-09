@@ -138,6 +138,10 @@ migrate("DROP TABLE IF EXISTS messages")
 migrate("DROP TABLE IF EXISTS threads")
 // pending_keys held server-generated private keys during rotation — replaced by client-side key generation
 migrate("DROP TABLE IF EXISTS pending_keys")
+// Proof-of-possession: 1 when the registrant proved they hold the private key
+// matching the submitted public key (signed challenge at registration).
+// Surfaced to verifiers in resolver responses; 0 for pre-PoP registrations.
+migrate("ALTER TABLE agents ADD COLUMN pop_verified INTEGER NOT NULL DEFAULT 0")
 
 // Backfill public_key_history for any pre-existing agents — one 'register' row per
 // agent using their current public_key and created_at. Idempotent: only inserts
@@ -172,6 +176,7 @@ export type Agent = {
   capabilities: string
   revoked: number
   rotation_requested: number
+  pop_verified: number
   created_at: number
 }
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
-import { generateKeyPairSync } from 'crypto'
+import { generateKeyPairSync, createPrivateKey, sign as cryptoSign } from 'crypto'
 import type { FastifyInstance } from 'fastify'
 
 // setup.ts has already set DB_PATH=:memory: before this file runs (via setupFiles)
@@ -144,6 +144,82 @@ describe('POST /agents/register', () => {
       payload: { name: 'unauth', public_key: publicKey },
     })
     expect(res.statusCode).toBe(401)
+  })
+
+  // ── Proof-of-possession ─────────────────────────────────────────────────────
+
+  function makePop(publicKey: string, privateKey: string, createdOffset = 0) {
+    const pop_created = Math.floor(Date.now() / 1000) + createdOffset
+    const pop = cryptoSign(
+      null,
+      Buffer.from(`envoys-pop:v1:${pop_created}:${publicKey}`),
+      createPrivateKey(privateKey),
+    ).toString('base64')
+    return { pop, pop_created }
+  }
+
+  it('records pop_verified when a valid proof-of-possession is supplied', async () => {
+    const { publicKey, privateKey } = makeEd25519()
+    const res = await app.inject({
+      method: 'POST', url: '/agents/register',
+      headers: { authorization: `Bearer ${accountKey}` },
+      payload: { name: 'pop-agent', public_key: publicKey, ...makePop(publicKey, privateKey) },
+    })
+    expect(res.statusCode).toBe(201)
+    expect(res.json().pop_verified).toBe(true)
+
+    // Surfaced to verifiers in resolver responses.
+    const resolved = await app.inject({ method: 'GET', url: `/agents/${res.json().address}` })
+    expect(resolved.json().pop_verified).toBe(true)
+  })
+
+  it('registers without pop as pop_verified=false (compat)', async () => {
+    const { publicKey } = makeEd25519()
+    const res = await app.inject({
+      method: 'POST', url: '/agents/register',
+      headers: { authorization: `Bearer ${accountKey}` },
+      payload: { name: 'no-pop-agent', public_key: publicKey },
+    })
+    expect(res.statusCode).toBe(201)
+    expect(res.json().pop_verified).toBe(false)
+
+    const resolved = await app.inject({ method: 'GET', url: `/agents/${res.json().address}` })
+    expect(resolved.json().pop_verified).toBe(false)
+  })
+
+  it('rejects a pop signed by a different key', async () => {
+    const { publicKey } = makeEd25519()
+    const { privateKey: otherPriv } = makeEd25519()
+    const res = await app.inject({
+      method: 'POST', url: '/agents/register',
+      headers: { authorization: `Bearer ${accountKey}` },
+      payload: { name: 'forged-pop', public_key: publicKey, ...makePop(publicKey, otherPriv) },
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().error).toMatch(/pop signature/)
+  })
+
+  it('rejects a stale pop_created', async () => {
+    const { publicKey, privateKey } = makeEd25519()
+    const res = await app.inject({
+      method: 'POST', url: '/agents/register',
+      headers: { authorization: `Bearer ${accountKey}` },
+      payload: { name: 'stale-pop', public_key: publicKey, ...makePop(publicKey, privateKey, -600) },
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().error).toMatch(/window/)
+  })
+
+  it('rejects pop without pop_created (and vice versa)', async () => {
+    const { publicKey, privateKey } = makeEd25519()
+    const { pop } = makePop(publicKey, privateKey)
+    const res = await app.inject({
+      method: 'POST', url: '/agents/register',
+      headers: { authorization: `Bearer ${accountKey}` },
+      payload: { name: 'half-pop', public_key: publicKey, pop },
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().error).toMatch(/pop_created/)
   })
 })
 

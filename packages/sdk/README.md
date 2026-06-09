@@ -97,7 +97,7 @@ By default the signature covers method, path, and body — which means a signatu
 const headers = agent.signRequest('POST', '/rpc', body, { authority: 'receiver.example.com' })
 ```
 
-The verifier reconstructs `@authority` from its own identity — `options.authority` if set (do this behind a proxy that rewrites Host), otherwise the request's `Host` header — so a relayed signature fails on any other host. Opt-in for now: verifiers older than 0.9.0 reject signatures covering components they don't reconstruct, so only send it to receivers you know are current. Spec v1.6.0 §4.2.
+The verifier reconstructs `@authority` from its own identity — `options.authority` if set (do this behind a proxy that rewrites Host), otherwise the request's `Host` header — so a relayed signature fails on any other host. The `Host` fallback is only sound when your server rejects or routes away requests whose `Host` doesn't match an authority it serves (standard name-based virtual hosting); if your server accepts arbitrary `Host` values, set `options.authority` explicitly. Opt-in for now: verifiers older than 0.9.0 reject signatures covering components they don't reconstruct, so only send it to receivers you know are current. Spec v1.6.0 §4.2.
 
 ### Dual-shape keyid resolution (W3C DID interop)
 

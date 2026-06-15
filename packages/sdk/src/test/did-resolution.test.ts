@@ -5,6 +5,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { Envoys } from '../index.js'
 
+// The keyid/did:web resolution SSRF guard does a real DNS lookup on the host.
+// Stub it so these fetch-stubbed tests stay hermetic — every host resolves to
+// a public address, letting the DID-document parsing logic be exercised.
+vi.mock('dns/promises', () => ({
+  lookup: vi.fn(async () => [{ address: '93.184.216.34', family: 4 }]),
+}))
+
 // RFC 8032 §7.1 Test 1 public key in JWK form (base64url 32 bytes)
 const TEST_JWK_X = '11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo'
 

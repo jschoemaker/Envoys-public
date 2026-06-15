@@ -6,6 +6,7 @@ export type {
   KeySyncResult,
   VerifyRequestResult,
   VerifyRequestOptions,
+  ResolverGuardOptions,
   VerifyAgentCardResult,
   PinStore,
 } from './types.js'

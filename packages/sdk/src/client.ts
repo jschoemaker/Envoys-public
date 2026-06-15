@@ -1,4 +1,8 @@
 import { createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, sign as cryptoSign, verify as cryptoVerify, createHash } from 'crypto'
+import { lookup } from 'dns/promises'
+import { lookup as lookupCb } from 'dns'
+import { isIP } from 'net'
+import { Agent } from 'undici'
 import type {
   EnvoysConfig,
   RegisterOptions,
@@ -7,12 +11,16 @@ import type {
   VerifyAgentCardResult,
   VerifyRequestResult,
   VerifyRequestOptions,
+  ResolverGuardOptions,
   PinStore,
 } from './types.js'
 
 const DEFAULT_BASE_URL    = 'https://envoys.me'
 const KEY_CACHE_TTL_MS    = 5 * 60 * 1000
 const REPLAY_CACHE_TTL_MS = 5 * 60 * 1000  // matches signature timestamp window
+
+const KEYID_FETCH_TIMEOUT_MS   = 5000
+const KEYID_MAX_RESPONSE_BYTES = 16 * 1024
 
 const keyCache    = new Map<string, { key: string; expires: number }>()
 const replayCache = new Map<string, number>()  // signature key → expires_at
@@ -87,6 +95,214 @@ function extractEd25519FromDidDocument(doc: any, sourceUrl: string): string {
 
   const keyObj = createPublicKey({ key: ed.publicKeyJwk!, format: 'jwk' })
   return keyObj.export({ format: 'pem', type: 'spki' }) as string
+}
+
+// ── keyid resolution SSRF guards ──────────────────────────────────────────────
+// The keyid is sender-controlled, so fetching it is an untrusted outbound
+// request. Without these guards a hostile signer can point the verifier at
+// internal hosts ("keyid":"http://169.254.169.254/...") for blind SSRF, or
+// serve a multi-megabyte body to exhaust memory. We enforce: https only,
+// no loopback/private/link-local destinations, a response-size cap, a fetch
+// timeout, and no redirects (which could otherwise hop a public host into a
+// private one). Spec §11.1 / §5.4.
+
+// Is this literal IP in a range that must never be reached from a key resolver?
+// Covers loopback, RFC1918 private, link-local, CGNAT, ULA, unspecified, and
+// IPv4-mapped IPv6 forms of the same.
+function isBlockedIp(ip: string): boolean {
+  const v = isIP(ip)
+  if (v === 4) return isBlockedIpv4(ip)
+  if (v === 6) return isBlockedIpv6(ip)
+  return true  // not a parseable IP → fail closed
+}
+
+function isBlockedIpv4(ip: string): boolean {
+  const o = ip.split('.').map(n => parseInt(n, 10))
+  if (o.length !== 4 || o.some(n => Number.isNaN(n) || n < 0 || n > 255)) return true
+  const [a, b] = o
+  if (a === 10) return true                          // 10.0.0.0/8 private
+  if (a === 127) return true                         // 127.0.0.0/8 loopback
+  if (a === 0) return true                           // 0.0.0.0/8 this-network
+  if (a === 169 && b === 254) return true            // 169.254.0.0/16 link-local (incl. cloud metadata)
+  if (a === 172 && b >= 16 && b <= 31) return true   // 172.16.0.0/12 private
+  if (a === 192 && b === 168) return true            // 192.168.0.0/16 private
+  if (a === 100 && b >= 64 && b <= 127) return true  // 100.64.0.0/10 CGNAT
+  if (a === 192 && b === 0 && o[2] === 0) return true // 192.0.0.0/24 IETF
+  if (a >= 240) return true                          // 240.0.0.0/4 reserved + 255.255.255.255
+  return false
+}
+
+function isBlockedIpv6(ip: string): boolean {
+  const lower = ip.toLowerCase().split('%')[0]  // strip zone id
+  if (lower === '::1' || lower === '::') return true               // loopback / unspecified
+  // IPv4-mapped (::ffff:a.b.c.d) and IPv4-compatible — defer to the v4 rules.
+  const mapped = lower.match(/(?:::ffff:)?(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/)
+  if (mapped) return isBlockedIpv4(mapped[1])
+  const head = lower.split(':')[0]
+  const h = parseInt(head || '0', 16)
+  if ((h & 0xfe00) === 0xfc00) return true   // fc00::/7 unique-local
+  if ((h & 0xffc0) === 0xfe80) return true   // fe80::/10 link-local
+  return false
+}
+
+// Validate a keyid URL and confirm every address its host resolves to is
+// publicly routable. Throws on any violation. DNS rebinding (a host that
+// resolves to a public IP here but a private one when fetch re-resolves)
+// remains a residual risk callers needing hard isolation should address at
+// the network layer; this catches the overwhelmingly common cases.
+async function assertSafeResolutionUrl(rawUrl: string, guard: ResolverGuardOptions): Promise<void> {
+  let url: URL
+  try { url = new URL(rawUrl) }
+  catch { throw new Error(`keyid is not a valid absolute URL: ${rawUrl}`) }
+
+  if (url.protocol !== 'https:' && !(guard.allowInsecureHttp && url.protocol === 'http:')) {
+    throw new Error(`keyid must use https (got ${url.protocol}//) at ${rawUrl}`)
+  }
+
+  if (guard.allowPrivateHosts) return
+
+  const host = url.hostname.replace(/^\[|\]$/g, '')  // strip IPv6 brackets
+  const lowerHost = host.toLowerCase()
+  if (
+    lowerHost === 'localhost' ||
+    lowerHost.endsWith('.localhost') ||
+    lowerHost.endsWith('.local') ||
+    lowerHost.endsWith('.internal') ||
+    lowerHost.endsWith('.home.arpa')
+  ) {
+    throw new Error(`keyid host "${host}" is not a public name: ${rawUrl}`)
+  }
+
+  if (isIP(host)) {
+    if (isBlockedIp(host)) throw new Error(`keyid host "${host}" is a non-public address: ${rawUrl}`)
+    return
+  }
+
+  let resolved: Array<{ address: string }>
+  try { resolved = await lookup(host, { all: true }) }
+  catch { throw new Error(`keyid host "${host}" did not resolve: ${rawUrl}`) }
+  if (resolved.length === 0) throw new Error(`keyid host "${host}" did not resolve: ${rawUrl}`)
+  for (const { address } of resolved) {
+    if (isBlockedIp(address)) {
+      throw new Error(`keyid host "${host}" resolves to a non-public address (${address}): ${rawUrl}`)
+    }
+  }
+}
+
+// Connect-time guard: validate every address the host resolves to and connect
+// only to a validated one. Because undici uses exactly this lookup result for
+// the TCP connection (no second resolution), it closes the DNS-rebinding TOCTOU
+// the pre-flight check in assertSafeResolutionUrl alone leaves open — a host
+// that answers public here but private at connect time is refused at connect.
+// TLS SNI still uses the original hostname, so certificate validation is intact.
+export function guardedLookup(
+  hostname: string,
+  options: any,
+  callback: (err: NodeJS.ErrnoException | null, address?: any, family?: number) => void,
+): void {
+  lookupCb(hostname, { ...options, all: true }, (err, addresses: any) => {
+    if (err) return callback(err)
+    const list = Array.isArray(addresses) ? addresses : [addresses]
+    for (const a of list) {
+      if (isBlockedIp(a.address)) {
+        return callback(
+          new Error(`keyid host "${hostname}" resolves to a non-public address (${a.address})`) as NodeJS.ErrnoException,
+        )
+      }
+    }
+    if (options && options.all) return callback(null, list)
+    callback(null, list[0].address, list[0].family)
+  })
+}
+
+// Guarded fetch for key resolution: validates the URL, pins resolution to a
+// public address at connect time (no rebinding), enforces a timeout, forbids
+// redirects, and reads at most maxResponseBytes before parsing JSON.
+async function safeResolveFetch(rawUrl: string, accept: string, guard: ResolverGuardOptions): Promise<any> {
+  await assertSafeResolutionUrl(rawUrl, guard)
+
+  const timeoutMs = guard.timeoutMs ?? KEYID_FETCH_TIMEOUT_MS
+  const maxBytes  = guard.maxResponseBytes ?? KEYID_MAX_RESPONSE_BYTES
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+
+  // Attach the connect-time guard unless private hosts are explicitly allowed
+  // (local-testing escape hatch). The dispatcher is per-call so the lookup
+  // guard can't leak into unrelated fetches.
+  const dispatcher = guard.allowPrivateHosts
+    ? undefined
+    : new Agent({ connect: { lookup: guardedLookup } })
+
+  try {
+    const init: any = {
+      headers:  { Accept: accept },
+      redirect: 'error',  // a redirect could hop a public host to a private one
+      signal:   controller.signal,
+    }
+    if (dispatcher) init.dispatcher = dispatcher
+    const res = await fetch(rawUrl, init)
+    if (!res.ok) throw new Error(`keyid URL did not resolve: ${rawUrl} (HTTP ${res.status})`)
+
+    const declared = parseInt(res.headers?.get?.('content-length') ?? '', 10)
+    if (!Number.isNaN(declared) && declared > maxBytes) {
+      throw new Error(`keyid response too large (${declared} > ${maxBytes} bytes): ${rawUrl}`)
+    }
+
+    const contentType = (res.headers?.get?.('content-type') ?? '').toLowerCase()
+    const data = await readCappedJson(res, maxBytes, rawUrl)
+    return { data, contentType }
+  } catch (err: any) {
+    if (err?.name === 'AbortError') throw new Error(`keyid resolution timed out after ${timeoutMs}ms: ${rawUrl}`)
+    // A connect-time guard rejection surfaces as a fetch failure whose cause is
+    // our lookup error — unwrap it so the caller sees why.
+    const cause = err?.cause
+    if (cause?.message && /non-public address/.test(cause.message)) throw new Error(cause.message)
+    throw err
+  } finally {
+    clearTimeout(timer)
+    if (dispatcher) await dispatcher.close().catch(() => {})
+  }
+}
+
+// Read and JSON-parse a response body, aborting if it exceeds maxBytes. Real
+// undici fetch exposes res.body as a stream, so the cap is enforced before the
+// whole payload is buffered. Falls back to res.text()/res.json() for runtimes
+// or test mocks that don't expose a stream (there the declared content-length
+// check in the caller is the only size guard).
+async function readCappedJson(res: Response, maxBytes: number, rawUrl: string): Promise<any> {
+  const body: any = (res as any).body
+  let text: string | undefined
+
+  if (body && typeof body.getReader === 'function') {
+    const reader = body.getReader()
+    const chunks: Buffer[] = []
+    let total = 0
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value) {
+        total += value.length
+        if (total > maxBytes) {
+          await reader.cancel().catch(() => {})
+          throw new Error(`keyid response exceeded ${maxBytes} bytes: ${rawUrl}`)
+        }
+        chunks.push(Buffer.from(value))
+      }
+    }
+    text = Buffer.concat(chunks).toString('utf8')
+  } else if (typeof (res as any).text === 'function') {
+    text = await res.text()
+    if (Buffer.byteLength(text, 'utf8') > maxBytes) {
+      throw new Error(`keyid response exceeded ${maxBytes} bytes: ${rawUrl}`)
+    }
+  } else if (typeof (res as any).json === 'function') {
+    return await res.json()  // legacy/mock response without a readable body
+  } else {
+    throw new Error(`keyid response has no readable body: ${rawUrl}`)
+  }
+
+  try { return JSON.parse(text) }
+  catch { throw new Error(`keyid response is not valid JSON: ${rawUrl}`) }
 }
 
 export class Envoys {
@@ -308,7 +524,7 @@ export class Envoys {
 
   // Verify a JWS-signed Agent Card. Resolves the kid URL to fetch the issuer's
   // public key, verifies the signature, and returns the parsed card.
-  static async verifyAgentCard(jws: string): Promise<VerifyAgentCardResult> {
+  static async verifyAgentCard(jws: string, guard: ResolverGuardOptions = {}): Promise<VerifyAgentCardResult> {
     try {
       const parts = jws.split('.')
       if (parts.length !== 3) return { verified: false, error: 'Malformed JWS — expected 3 segments' }
@@ -326,7 +542,7 @@ export class Envoys {
       if (agentsIdx === -1) return { verified: false, keyid, error: 'kid is not an Envoys agent URL' }
       const address = keyid.slice(agentsIdx + '/agents/'.length)
 
-      const publicKeyPem = await Envoys.resolveKeyFromKeyid(keyid)
+      const publicKeyPem = await Envoys.resolveKeyFromKeyid(keyid, guard)
       const key = createPublicKey(publicKeyPem)
       const ok  = cryptoVerify(null, Buffer.from(`${headerB64}.${payloadB64}`), key, fromB64url(sigB64))
       if (!ok) return { verified: false, keyid, address, error: 'Signature verification failed' }
@@ -507,7 +723,7 @@ export class Envoys {
       }
       sigBase += `"@signature-params": (${componentsStr})${paramsStr}`
 
-      const publicKeyPem = await Envoys.resolveKeyFromKeyid(keyid)
+      const publicKeyPem = await Envoys.resolveKeyFromKeyid(keyid, options.resolver)
       const key = createPublicKey(publicKeyPem)
       const ok  = cryptoVerify(null, Buffer.from(sigBase), key, Buffer.from(sigB64, 'base64'))
       if (!ok) return fail('Signature verification failed', { keyid, address, publicKey: publicKeyPem })
@@ -602,17 +818,15 @@ export class Envoys {
   // Cached for 5 minutes keyed on the full keyid URL. The cache is shared with
   // resolvePublicKey but keyed differently, so neither path invalidates the
   // other's entries.
-  static async resolveKeyFromKeyid(keyidUrl: string): Promise<string> {
+  static async resolveKeyFromKeyid(keyidUrl: string, guard: ResolverGuardOptions = {}): Promise<string> {
     const cached = keyCache.get(keyidUrl)
     if (cached && cached.expires > Date.now()) return cached.key
 
-    const res = await fetch(keyidUrl, {
-      headers: { Accept: 'application/did+json, application/json;q=0.9' },
-    })
-    if (!res.ok) throw new Error(`keyid URL did not resolve: ${keyidUrl} (HTTP ${res.status})`)
-
-    const contentType = (res.headers?.get?.('content-type') ?? '').toLowerCase()
-    const data        = await res.json() as any
+    const { data, contentType } = await safeResolveFetch(
+      keyidUrl,
+      'application/did+json, application/json;q=0.9',
+      guard,
+    )
 
     let publicKeyPem: string
     if (contentType.includes('application/did+json') || Array.isArray(data?.verificationMethod)) {
@@ -646,13 +860,11 @@ export class Envoys {
   // publicKeyMultibase or publicKeyBase58 throw with a clear error so the
   // caller knows which format was found; support for those can be added
   // when there's a concrete need.
-  static async resolveDidWeb(domain: string): Promise<string> {
+  static async resolveDidWeb(domain: string, guard: ResolverGuardOptions = {}): Promise<string> {
     const host = domain.replace(/^https?:\/\//, '').replace(/\/$/, '')
     const url  = `https://${host}/.well-known/did.json`
-    const res  = await fetch(url)
-    if (!res.ok) throw new Error(`did:web DID Document not found at ${url} (HTTP ${res.status})`)
-    const doc = await res.json()
-    return extractEd25519FromDidDocument(doc, url)
+    const { data } = await safeResolveFetch(url, 'application/did+json, application/json;q=0.9', guard)
+    return extractEd25519FromDidDocument(data, url)
   }
 
   // ── Internals ─────────────────────────────────────────────────────────────

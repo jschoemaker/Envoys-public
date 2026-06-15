@@ -1,6 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { generateKeyPairSync } from 'crypto'
 import { Envoys } from '../index.js'
+import { guardedLookup } from '../client.js'
+
+// The keyid-resolution SSRF guard performs a real DNS lookup on the keyid host.
+// Stub it so the existing fetch-mocked tests stay hermetic (no network): every
+// non-IP host resolves to a public address. Individual tests override this with
+// mockResolvedValueOnce to exercise the private-address rejection path.
+vi.mock('dns/promises', () => ({
+  lookup: vi.fn(async () => [{ address: '93.184.216.34', family: 4 }]),
+}))
+import { lookup } from 'dns/promises'
 
 function makeEd25519() {
   return generateKeyPairSync('ed25519', {
@@ -1042,5 +1052,150 @@ describe('resolveKeyFromKeyid (dual-shape)', () => {
     const accept = call[1]?.headers?.Accept ?? ''
     expect(accept).toContain('application/did+json')
     expect(accept).toContain('application/json')
+  })
+})
+
+describe('keyid resolution SSRF guards', () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals()
+    Envoys.clearKeyCache()
+    vi.mocked(lookup).mockResolvedValue([{ address: '93.184.216.34', family: 4 }] as any)
+  })
+
+  function okPublicKeyFetch() {
+    const { publicKey } = makeEd25519()
+    return { fetchMock: vi.fn().mockResolvedValue({
+      ok:      true,
+      headers: { get: () => 'application/json' },
+      json:    async () => ({ public_key: publicKey }),
+    }), publicKey }
+  }
+
+  it('rejects non-https keyid URLs without fetching', async () => {
+    const { fetchMock } = okPublicKeyFetch()
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(Envoys.resolveKeyFromKeyid('http://envoys.me/agents/a@b.envoys.me'))
+      .rejects.toThrow(/must use https/)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('allows http only when allowInsecureHttp is set', async () => {
+    const { fetchMock } = okPublicKeyFetch()
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(Envoys.resolveKeyFromKeyid('http://envoys.me/agents/a@b.envoys.me', { allowInsecureHttp: true }))
+      .resolves.toMatch(/BEGIN PUBLIC KEY/)
+  })
+
+  it('rejects localhost keyid hosts without fetching', async () => {
+    const { fetchMock } = okPublicKeyFetch()
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(Envoys.resolveKeyFromKeyid('https://localhost/agents/a@b'))
+      .rejects.toThrow(/not a public name/)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects a literal private IP keyid host (cloud metadata range)', async () => {
+    const { fetchMock } = okPublicKeyFetch()
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(Envoys.resolveKeyFromKeyid('https://169.254.169.254/latest/meta-data'))
+      .rejects.toThrow(/non-public address/)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects a public hostname that resolves to a private address', async () => {
+    const { fetchMock } = okPublicKeyFetch()
+    vi.stubGlobal('fetch', fetchMock)
+    vi.mocked(lookup).mockResolvedValueOnce([{ address: '10.0.0.5', family: 4 }] as any)
+    await expect(Envoys.resolveKeyFromKeyid('https://rebind.attacker.example/key'))
+      .rejects.toThrow(/resolves to a non-public address/)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('allows private hosts when allowPrivateHosts is set (local testing escape hatch)', async () => {
+    const { fetchMock } = okPublicKeyFetch()
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(Envoys.resolveKeyFromKeyid('https://127.0.0.1:8080/key', { allowPrivateHosts: true }))
+      .resolves.toMatch(/BEGIN PUBLIC KEY/)
+  })
+
+  it('forbids following redirects', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, headers: { get: () => 'application/json' }, json: async () => ({}) })
+    vi.stubGlobal('fetch', fetchMock)
+    await Envoys.resolveKeyFromKeyid('https://envoys.me/agents/a@b.envoys.me').catch(() => {})
+    expect(fetchMock.mock.calls[0][1]?.redirect).toBe('error')
+  })
+
+  it('rejects responses whose declared content-length exceeds the cap', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok:      true,
+      headers: { get: (n: string) => n.toLowerCase() === 'content-length' ? String(64 * 1024) : 'application/json' },
+      json:    async () => ({ public_key: 'x' }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(Envoys.resolveKeyFromKeyid('https://envoys.me/agents/a@b.envoys.me'))
+      .rejects.toThrow(/too large/)
+  })
+
+  it('aborts the fetch on timeout', async () => {
+    const fetchMock = vi.fn().mockImplementation((_url: string, init: any) =>
+      new Promise((_resolve, reject) => {
+        init.signal.addEventListener('abort', () => {
+          const e = new Error('aborted'); (e as any).name = 'AbortError'; reject(e)
+        })
+      }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(Envoys.resolveKeyFromKeyid('https://envoys.me/agents/a@b.envoys.me', { timeoutMs: 10 }))
+      .rejects.toThrow(/timed out/)
+  })
+
+  it('attaches a connect-time guard dispatcher by default', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true, headers: { get: () => 'application/json' }, json: async () => ({ public_key: 'x' }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    await Envoys.resolveKeyFromKeyid('https://envoys.me/agents/a@b.envoys.me').catch(() => {})
+    expect(fetchMock.mock.calls[0][1]?.dispatcher).toBeDefined()
+  })
+
+  it('omits the dispatcher when allowPrivateHosts is set', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true, headers: { get: () => 'application/json' }, json: async () => ({ public_key: 'x' }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    await Envoys.resolveKeyFromKeyid('https://127.0.0.1/key', { allowPrivateHosts: true }).catch(() => {})
+    expect(fetchMock.mock.calls[0][1]?.dispatcher).toBeUndefined()
+  })
+})
+
+describe('guardedLookup (connect-time DNS-rebinding guard)', () => {
+  function run(host: string, options: any = {}): Promise<{ err: any; address: any; family: any }> {
+    return new Promise((resolve) => {
+      guardedLookup(host, options, (err, address, family) => resolve({ err, address, family }))
+    })
+  }
+
+  it('passes a public literal address through (the connected IP == validated IP)', async () => {
+    const { err, address } = await run('93.184.216.34')
+    expect(err).toBeNull()
+    expect(address).toBe('93.184.216.34')
+  })
+
+  it('rejects a private literal address at connect time', async () => {
+    const { err } = await run('169.254.169.254')
+    expect(err).toBeTruthy()
+    expect(err.message).toMatch(/non-public address/)
+  })
+
+  it('rejects loopback at connect time', async () => {
+    const { err } = await run('127.0.0.1')
+    expect(err).toBeTruthy()
+    expect(err.message).toMatch(/non-public address/)
+  })
+
+  it('returns the full validated list when called with all:true', async () => {
+    const { err, address } = await run('8.8.8.8', { all: true })
+    expect(err).toBeNull()
+    expect(Array.isArray(address)).toBe(true)
+    expect(address[0].address).toBe('8.8.8.8')
   })
 })

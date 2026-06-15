@@ -1,6 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { generateKeyPairSync, randomUUID } from 'crypto'
 import { Envoys } from '@envoys/sdk'
+
+// The SDK's keyid-resolution SSRF guard does a real DNS lookup on the keyid
+// host. Stub it so these fetch-stubbed handler tests stay hermetic (no network).
+vi.mock('dns/promises', () => ({
+  lookup: vi.fn(async () => [{ address: '93.184.216.34', family: 4 }]),
+}))
 import { createA2AClient } from '../client.js'
 import { createA2AHandler } from '../handler.js'
 import { buildAgentCard } from '../card.js'

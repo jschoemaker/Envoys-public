@@ -52,6 +52,29 @@ export interface PinStore {
   clear(): void | Promise<void>
 }
 
+// Controls the guarded fetch the verifier performs when resolving a keyid URL.
+// The keyid is sender-controlled, so its resolution is treated as an untrusted
+// outbound request (SSRF surface). Defaults are safe; override only when you
+// know what you're doing (e.g. allowPrivateHosts for local integration tests).
+export interface ResolverGuardOptions {
+  // Abort the resolution fetch after this many milliseconds. Default 5000.
+  timeoutMs?: number
+
+  // Reject resolution responses larger than this many bytes (a public key fits
+  // in <1 kB; a single-key DID Document in <2 kB). Default 16384.
+  maxResponseBytes?: number
+
+  // Allow the keyid host to resolve to a loopback/private/link-local address.
+  // Default false — such hosts are rejected to prevent SSRF into internal
+  // services and cloud metadata endpoints. Set true ONLY for local testing.
+  allowPrivateHosts?: boolean
+
+  // Allow non-HTTPS (http:) keyid URLs. Default false — https is required so a
+  // network attacker cannot strip transport security from key resolution. Set
+  // true ONLY for local testing.
+  allowInsecureHttp?: boolean
+}
+
 export interface VerifyRequestOptions {
   // Restrict acceptable senders. Each entry is either an address
   // ("alice@acme.envoys.me") or a full keyid URL. A signed request from any
@@ -74,6 +97,10 @@ export interface VerifyRequestOptions {
   // If omitted, the request's Host header is used. Set this explicitly when
   // running behind a proxy that rewrites Host.
   authority?: string
+
+  // SSRF guards applied when fetching the (sender-controlled) keyid URL.
+  // See ResolverGuardOptions. Defaults are safe; usually leave unset.
+  resolver?: ResolverGuardOptions
 }
 
 export interface VerifyAgentCardResult {

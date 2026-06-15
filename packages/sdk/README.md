@@ -110,6 +110,20 @@ No caller-side opt-in is required — `Envoys.verifyRequest()` sniffs `Content-T
 
 For explicit did:web bridging, `Envoys.resolveDidWeb(domain)` returns a PEM SPKI from a `https://<domain>/.well-known/did.json` document. The lower-level `Envoys.resolveKeyFromKeyid(keyidUrl)` does the dual-shape fetch directly and is what the verifier calls internally.
 
+### keyid resolution is SSRF-guarded (since 0.10.0)
+
+The `keyid` is sender-controlled, so resolving it is an untrusted outbound request. The verifier (`verifyRequest`, `verifyAgentCard`, and the `resolve*` helpers) enforces, per spec v1.6.3 §5.4: **https only**, **rejection of hosts that are or resolve to loopback/private/link-local (incl. the `169.254.169.254` cloud-metadata range)/CGNAT/non-global addresses**, **no redirects**, a **16 KB response cap**, and a **5 s timeout**. Override via `ResolverGuardOptions` (`options.resolver` on `verifyRequest`, or the second arg to the `resolve*`/`verifyAgentCard` calls):
+
+```ts
+await Envoys.verifyRequest(method, path, headers, body, {
+  resolver: { timeoutMs: 3000, maxResponseBytes: 8192 },
+})
+// Local testing only — re-enables private hosts / http:
+await Envoys.resolveKeyFromKeyid(url, { allowPrivateHosts: true, allowInsecureHttp: true })
+```
+
+DNS rebinding is closed too: resolution is pinned to the validated public address at connect time (via an undici dispatcher whose `connect.lookup` re-validates and connects only to a public IP, with TLS SNI preserved), so the address connected to is the address validated. For hard isolation, also constrain egress at the network layer.
+
 ### Optional: per-signature `tag`
 
 `signRequest` accepts an optional `tag` parameter (RFC 9421 §2.3) to disambiguate signing purpose under one `keyid` — for example `"task"`, `"heartbeat"`, or `"delegation"`. Verifiers MAY enforce that the tag matches the expected context. Absence is equivalent to `tag="a2a-message"`.
